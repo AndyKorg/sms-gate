@@ -1,7 +1,6 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include "RingBuffer.h"
-#include "avrlibtypes.h"
 #include "bits_macros.h"
 #include "usart.h"
 
@@ -11,7 +10,6 @@
 #define IntIsOn(reg)         BitIsSet(reg, SREG_I)
 
 // Буферы для приема и передачи данных для каждого USART модуля
-#define BUFFER_SIZE	128
 RingBuffer_t BufTx0, BufRx0, BufTx1, BufRx1;
 
 typedef struct {
@@ -39,8 +37,8 @@ void usart_init(UsartModule_t usart, uint16_t baud_rate) {
 	UsartConfig_t *config = &usart_configs[usart];
 	config->baud_rate = baud_rate;
 	if (config->status == 0){
-		RingBuffer_init(config->rx_buf, BUFFER_SIZE);
-		RingBuffer_init(config->tx_buf, BUFFER_SIZE);
+		RingBuffer_init(config->rx_buf, MAX_PACKET_SIZE);
+		RingBuffer_init(config->tx_buf, MAX_PACKET_SIZE);
 		config->status = 1;
 	}
 
@@ -63,9 +61,9 @@ void usart_init(UsartModule_t usart, uint16_t baud_rate) {
 }
 
 // Получить символ из кольцевого буфера
-u08 usart_getchar(UsartModule_t usart, u08 *c) {
+uint8_t usart_getchar(UsartModule_t usart, uint8_t *c) {
 	UsartConfig_t *config = &usart_configs[usart];
-	u08 ret, storeInt;
+	uint8_t ret, storeInt;
 
 	storeInt = SREG;
 	Disable_Interrupts;
@@ -81,9 +79,9 @@ u08 usart_getchar(UsartModule_t usart, u08 *c) {
 }
 
 // Отправить символ в кольцевой буфер
-u08 usart_putchar(UsartModule_t usart, u08 c) {
+uint8_t usart_putchar(UsartModule_t usart, uint8_t c) {
 	UsartConfig_t *config = &usart_configs[usart];
-	u08 ret, storeInt;
+	uint8_t ret, storeInt;
 
 	storeInt = SREG;
 	Disable_Interrupts;
@@ -96,6 +94,31 @@ u08 usart_putchar(UsartModule_t usart, u08 c) {
 	}
 	if (IntIsOn(storeInt)) Enable_Interrupts;
 	return ret;
+}
+
+// Отправка строки
+void usart_send_string(UsartModule_t usart, const char* str) {
+	while (*str) {
+		while (usart_putchar(usart, *str) != 0); // Ждём, если буфер заполнен
+		str++;
+	}
+}
+
+// Прием строки до символа '\n' или '\r', либо пока не достигнут max_len - 1
+uint8_t usart_receive_string(UsartModule_t usart, char* buffer, uint8_t max_len) {
+	uint8_t i = 0;
+	uint8_t c;
+
+	while (i < (max_len - 1)) {
+		if (usart_getchar(usart, &c) == 0) {
+			if (c == '\n' || c == '\r') {
+				break;
+			}
+			buffer[i++] = c;
+		}
+	}
+	buffer[i] = '\0'; // Завершаем строку
+	return i;
 }
 
 // Инлайн функции для обработки прерываний для каждого USART модуля

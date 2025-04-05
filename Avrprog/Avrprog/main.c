@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
@@ -7,7 +8,6 @@
 #define USART_EXT		USART0
 #define USART_SIM900	USART1
 
-#include "avrlibtypes.h"
 #include "bits_macros.h"
 
 #define PWR_KEY_DDR_PORT	DDRD
@@ -27,9 +27,10 @@
 #define IntIsOff(reg)		BitIsClear(reg, SREG_I)
 #define IntIsOn(reg)		BitIsSet(reg, SREG_I)
 
+#include "sms_forward.h"
 
 void Sim900SReset(void){
-	u08 i, St;
+	uint8_t i, St;
 	
 	if (StatusIsReady)
 		St = 1;
@@ -69,8 +70,6 @@ void Sim900SReset(void){
 
 int main(void){
 
-	u08 i;
-	
 	PWR_KEY_DDR_PORT |= Bit(PWR_KEY_PIN);
 	PwrKeyOff;
 	//_delay_ms(500);										//Задержка перед включением модуля
@@ -84,23 +83,9 @@ int main(void){
 	
 	usart_putchar(USART_EXT, 'R');						//Микроконтроллер готов
 	Sim900SReset();
-	usart_putchar(USART_EXT, 'S');						//Старт запуска модуля SIM900
-	
-    while(1)
-    {
-		if (usart_getchar(USART_EXT, &i) == 0){
-			if (i == '@'){
-				usart_putchar(USART_EXT,i);
-				usart_putchar(USART_EXT,0xD);
-				usart_putchar(USART_EXT,0xA);
-				Sim900SReset();
-			}
-			else{
-				usart_putchar(USART_SIM900,i);
-			}
-		}
-		if (usart_getchar(USART_SIM900, &i) == 0){
-			usart_putchar(USART_EXT,i);
-		}
-    }
+
+	if (sms_forward_init(USART_SIM900, "+79697120710", USART_EXT) == 0){
+		gsm_wait_and_forward_sms();
+	}
+    while(1);
 }

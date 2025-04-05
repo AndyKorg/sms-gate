@@ -151,9 +151,6 @@
     <Compile Include="avrlibdefs.h">
       <SubType>compile</SubType>
     </Compile>
-    <Compile Include="avrlibtypes.h">
-      <SubType>compile</SubType>
-    </Compile>
     <Compile Include="m25p128.c">
       <SubType>compile</SubType>
     </Compile>
@@ -173,6 +170,12 @@
       <SubType>compile</SubType>
     </Compile>
     <Compile Include="serial.h">
+      <SubType>compile</SubType>
+    </Compile>
+    <Compile Include="sms_forward.c">
+      <SubType>compile</SubType>
+    </Compile>
+    <Compile Include="sms_forward.h">
       <SubType>compile</SubType>
     </Compile>
     <Compile Include="usart.c">
