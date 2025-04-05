@@ -1,7 +1,9 @@
 ﻿
-Microsoft Visual Studio Solution File, Format Version 11.00
+Microsoft Visual Studio Solution File, Format Version 12.00
 # Atmel Studio Solution File, Format Version 11.00
-Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "Avrprog", "Avrprog\Avrprog.cproj", "{6852BE8C-5F72-4ABF-911A-0DED46DA688B}"
+VisualStudioVersion = 14.0.23107.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{54F91283-7BC4-4236-8FF9-10F437C3AD48}") = "Retranslate", "Avrprog\Retranslate.cproj", "{6852BE8C-5F72-4ABF-911A-0DED46DA688B}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
