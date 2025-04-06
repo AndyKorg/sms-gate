@@ -4,6 +4,8 @@
 #include <util/delay.h>
 #include "usart.h"
 
+#include "sms_forward.h"
+
 static UsartModule_t gsm_usart_local = USART_MAX;
 static UsartModule_t log_usart_local = USART_MAX;
 
@@ -23,7 +25,7 @@ static void gsm_log(const char* msg)
 static uint8_t gsm_read_line(char* buffer, uint8_t max_len)
 {
     gsm_log("[DEBUG] gsm_read_line: waiting for line...");
-    uint8_t res = usart_receive_string(gsm_usart_local, buffer, max_len);
+    uint8_t res = usart_receive_string(gsm_usart_local, buffer, max_len, 8000);
 
     if (res) {
         if (log_usart_local < USART_MAX) {
@@ -41,12 +43,17 @@ static uint8_t gsm_read_line(char* buffer, uint8_t max_len)
 // Ожидание строки ответа от модуля
 static uint8_t gsm_wait_for_response(const char* expected, uint16_t timeout_ms)
 {
-    char buffer[64];
+    const int max_len = 64;
+    char buffer[max_len];
+    int len = strlen(expected);
+    if (len >= max_len) {
+        return 1;
+    }
     uint16_t waited = 0;
     const uint16_t poll_interval = 50;
 
     while (waited < timeout_ms) {
-        if (gsm_read_line(buffer, sizeof(buffer))) {
+        if (gsm_read_line(buffer, len+1)) {
             if (strstr(buffer, expected)) {
                 gsm_log("[GSM] Response OK");
                 return 1;
@@ -70,61 +77,64 @@ static uint8_t gsm_send_command(const char* cmd)
     return gsm_wait_for_response("OK", 2000);
 }
 
-void gsm_log_bytes_sent(const char *label, const uint8_t *data, size_t len) {
-	printf("[TX] %s (%zu bytes): ", label, len);
-	for (size_t i = 0; i < len; ++i) {
-		printf("%02X ", data[i]);
-	}
-	printf("\n");
+void gsm_log_bytes_sent(const char *label, const uint8_t *data, size_t len)
+{
+    printf("[TX] %s (%zu bytes): ", label, len);
+    for (size_t i = 0; i < len; ++i) {
+        printf("%02X ", data[i]);
+    }
+    printf("\n");
 }
 
-void gsm_log_bytes_received(const char *label, const uint8_t *data, size_t len) {
-	printf("[RX] %s (%zu bytes): ", label, len);
-	for (size_t i = 0; i < len; ++i) {
-		printf("%02X ", data[i]);
-	}
-	printf("\n");
+void gsm_log_bytes_received(const char *label, const uint8_t *data, size_t len)
+{
+    printf("[RX] %s (%zu bytes): ", label, len);
+    for (size_t i = 0; i < len; ++i) {
+        printf("%02X ", data[i]);
+    }
+    printf("\n");
 }
 
 
 // Пересылка входящего SMS-сообщения
-static void gsm_forward_sms(const char* message) {
-	gsm_log("[SMS] Forwarding message");
+static void gsm_forward_sms(const char* message)
+{
+    gsm_log("[SMS] Forwarding message");
 
-	if (!gsm_send_command("AT+CMGF=1")) {
-		gsm_log("[SMS] Failed to set text mode");
-		return;
-	}
+    if (!gsm_send_command("AT+CMGF=1")) {
+        gsm_log("[SMS] Failed to set text mode");
+        return;
+    }
 
-	// Собираем всю команду в буфер
-	char cmd[64];
-	snprintf(cmd, sizeof(cmd), "AT+CMGS=\"%s\"\n", phone_number_to);
+    // Собираем всю команду в буфер
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "AT+CMGS=\"%s\"\n", phone_number_to);
 
-	gsm_log("[GSM] >> ");
-	gsm_log(cmd);
+    gsm_log("[GSM] >> ");
+    gsm_log(cmd);
 
-	usart_send_string(gsm_usart_local, cmd);
-	usart_send_string(gsm_usart_local, "\r");
+    usart_send_string(gsm_usart_local, cmd);
+    usart_send_string(gsm_usart_local, "\r");
 
-	gsm_log("[DEBUG] Waiting for > prompt...");
-	_delay_ms(200); // 200 мс пауза перед ожиданием >
+    gsm_log("[DEBUG] Waiting for > prompt...");
+    _delay_ms(200); // 200 мс пауза перед ожиданием >
 
-	// Ждём приглашение к вводу сообщения
-	if (!gsm_wait_for_response(">", 5000)) {
-		gsm_log("[SMS] No prompt '>' received");
-		return;
-	}
+    // Ждём приглашение к вводу сообщения
+    if (!gsm_wait_for_response(">", 5000)) {
+        gsm_log("[SMS] No prompt '>' received");
+        return;
+    }
 
-	gsm_log("[DEBUG] Sending SMS text and Ctrl+Z...");
-	usart_send_string(gsm_usart_local, message);
-	usart_putchar(gsm_usart_local, 26); // Ctrl+Z
+    gsm_log("[DEBUG] Sending SMS text and Ctrl+Z...");
+    usart_send_string(gsm_usart_local, message);
+    usart_putchar(gsm_usart_local, 26); // Ctrl+Z
 
-	gsm_log("[DEBUG] Waiting for final OK after sending...");
-	if (!gsm_wait_for_response("OK", 10000)) {
-		gsm_log("[SMS] Sending failed or timed out");
-		} else {
-		gsm_log("[SMS] Message sent successfully");
-	}
+    gsm_log("[DEBUG] Waiting for final OK after sending...");
+    if (!gsm_wait_for_response("OK", 10000)) {
+        gsm_log("[SMS] Sending failed or timed out");
+    } else {
+        gsm_log("[SMS] Message sent successfully");
+    }
 }
 
 
@@ -132,6 +142,12 @@ static void gsm_forward_sms(const char* message) {
 void gsm_wait_and_forward_sms()
 {
     char line[160];
+
+    if (!gsm_send_command("AT")) return;
+    if (!gsm_send_command("AT+CMGF=1")) return;
+    if (!gsm_send_command("AT+CNMI=2,2,0,0,0")) return;
+
+    gsm_log("[INIT] SMS forwarding initialized");
 
     while (1) {
         gsm_log("[DEBUG] Waiting for line...");
@@ -158,6 +174,84 @@ void gsm_wait_and_forward_sms()
     }
 }
 
+#define MAX_RESET_ATTEMPTS 10
+
+int sim_reset(PwrKeyControlCallback pwr_callback)
+{
+    gsm_log("[SIM900] Start reset...");
+    if (gsm_usart_local >= USART_MAX || pwr_callback == NULL) {
+        return -1;
+    }
+
+    uint8_t resets = 0;
+    uint8_t rx_buffer[8];
+
+    while (resets < MAX_RESET_ATTEMPTS) {
+        // Сброс через пин управления
+        pwr_callback(1);
+        _delay_ms(1500);  // удержание
+        pwr_callback(0);
+        _delay_ms(3200);  // ожидание загрузки
+
+        gsm_log("[SIM900] Waiting for power-up pattern...");
+
+        uint16_t waited = 0;
+        uint16_t timeout = 10000;
+        uint8_t byte;
+        uint8_t idx = 0;
+
+        // Ожидаем 2–6 байт, последние два из которых должны быть 0xFF
+        while (waited < timeout && idx < sizeof(rx_buffer)) {
+            if (usart_getchar(gsm_usart_local, &byte)) {
+                rx_buffer[idx++] = byte;
+
+                // Проверка: есть ли 2 байта и последние два — 0xFF
+                if (idx >= 2 &&
+                        rx_buffer[idx - 1] == 0xFF &&
+                        rx_buffer[idx - 2] == 0xFF) {
+
+                    char msg[64];
+                    snprintf(msg, sizeof(msg), "[SIM900] Got power pattern (%d bytes)", idx);
+                    gsm_log(msg);
+                    break;
+                }
+            } else {
+                _delay_ms(50);
+                waited += 50;
+            }
+        }
+
+        if (idx < 2 || rx_buffer[idx - 1] != 0xFF || rx_buffer[idx - 2] != 0xFF) {
+            gsm_log("[SIM900] Invalid power-up pattern, retrying...");
+            _delay_ms(1000);
+            resets++;
+            continue;
+        }
+
+        // После этого может прийти строка, например, "NORMAL POWER DOWN" в течении 500 мс
+/*
+        if (gsm_wait_for_response("NORMAL POWER DOWN", 500)) {
+            gsm_log("[SIM900] Received NORMAL POWER DOWN, retrying...");
+            resets++;
+            continue;
+        }
+*/
+        // Проверка связи через AT
+        usart_send_string(gsm_usart_local, "AT\r");
+        if (gsm_wait_for_response("OK", 2000)) {
+            gsm_log("[SIM900] Module ready after reset");
+            return 0;
+        }
+
+        gsm_log("[SIM900] No OK after AT, retrying reset...");
+        resets++;
+    }
+
+    gsm_log("[SIM900] All reset attempts failed");
+    return -1;
+}
+
+
 // Инициализация пересылки SMS
 int sms_forward_init(UsartModule_t gsm_usart, const char* forward_phone, UsartModule_t log_usart)
 {
@@ -173,12 +267,6 @@ int sms_forward_init(UsartModule_t gsm_usart, const char* forward_phone, UsartMo
 
     strncpy(phone_number_to, forward_phone, PHONE_NUMBER_MAX_LEN - 1);
     phone_number_to[PHONE_NUMBER_MAX_LEN - 1] = '\0';
-
-    if (!gsm_send_command("AT")) return -2;
-    if (!gsm_send_command("AT+CMGF=1")) return -3;
-    if (!gsm_send_command("AT+CNMI=2,2,0,0,0")) return -4;
-
-    gsm_log("[INIT] SMS forwarding initialized");
 
     return 0;
 }

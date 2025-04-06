@@ -12,9 +12,10 @@ typedef enum {
 } UsartModule_t;
 
 void usart_init(UsartModule_t usart, uint16_t baud_rate);
+
 uint8_t usart_getchar(UsartModule_t usart, uint8_t *c);
 uint8_t usart_putchar(UsartModule_t usart, uint8_t c);
 void usart_send_string(UsartModule_t usart, const char* str);
-uint8_t usart_receive_string(UsartModule_t usart, char* buffer, uint8_t max_len);
+uint8_t usart_receive_string(UsartModule_t usart, char* buffer, uint8_t max_len, uint16_t timeout_ms);
 
 #endif

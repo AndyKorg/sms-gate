@@ -29,63 +29,62 @@
 
 #include "sms_forward.h"
 
-void Sim900SReset(void){
-	uint8_t i, St;
-	
-	if (StatusIsReady)
-		St = 1;
-	else
-		St = 0;
-	PwrKeyOn;
-	_delay_ms(1000);						//Прижать на 1 секунду для включения
-	PwrKeyOff;
-	_delay_ms(3200);						//Через 3,2 с модуль должен быть готов
-	for(i=10; i>0;i--){
-		_delay_ms(200);
-		if (St){
-			if (StatusIsNotReady){
-				usart_putchar(USART_EXT,'O');
-				usart_putchar(USART_EXT,'k');
-				St = 99;
-				break;
-			}
-		}
-		else{
-			if (StatusIsReady){
-				usart_putchar(USART_EXT,'O');
-				usart_putchar(USART_EXT,'k');
-				St = 99;
-				break;
-			}
-		}
-	}
-	if (St != 99){
-		usart_putchar(USART_EXT,'E');
-		usart_putchar(USART_EXT,'r');
-		usart_putchar(USART_EXT,'r');
-	}
-	usart_putchar(USART_EXT,0xD);
-	usart_putchar(USART_EXT,0xA);
+void pwrKeyControlCallback(uint8_t level)
+{
+    if (level) {
+        PWR_KEY_PORT |= (1 << PWR_KEY_PIN);
+    } else {
+        PWR_KEY_PORT &= ~(1 << PWR_KEY_PIN);
+    }
 }
 
-int main(void){
+void usart_bridge_loop(void)
+{
+    uint8_t c = 0;
 
-	PWR_KEY_DDR_PORT |= Bit(PWR_KEY_PIN);
-	PwrKeyOff;
-	//_delay_ms(500);										//Задержка перед включением модуля
-	
-	//-------- Настройка порта для компьютера
-	usart_init(USART_EXT, 57600);
-	//-------- Настройка порта для модуля SIM900
-	usart_init(USART_SIM900, 57600);
+    while (1) {
+        // USART0 -> USART1
+        if (usart_getchar(USART_EXT, &c) == 0) {
+            if (c=='@') {
+                sim_reset(pwrKeyControlCallback);
+                continue;
+            }
+            usart_putchar(USART_SIM900, c);
+        }
 
-	Enable_Interrupts;
-	
-	usart_putchar(USART_EXT, 'R');						//Микроконтроллер готов
-	Sim900SReset();
+        // USART1 -> USART0
+        if (usart_getchar(USART_SIM900, &c) == 0) {
+            usart_putchar(USART_EXT, c);
+        }
+        _delay_us(10);
+    }
+}
 
-	if (sms_forward_init(USART_SIM900, "+79697120710", USART_EXT) == 0){
-		gsm_wait_and_forward_sms();
+int main(void)
+{
+
+    PWR_KEY_DDR_PORT |= 1<<PWR_KEY_PIN;
+
+    //-------- Настройка порта для компьютера
+    usart_init(USART_EXT, 57600);
+    //-------- Настройка порта для модуля SIM900
+    usart_init(USART_SIM900, 57600);
+
+    Enable_Interrupts;
+
+	usart_send_string(USART_EXT, "start\n\r");
+//debug
+    if (sms_forward_init(USART_SIM900, "+79697120710", USART_EXT) == 0) {
+		sim_reset(pwrKeyControlCallback);
 	}
+
+    usart_bridge_loop();
+//end debug
+
+    if (sms_forward_init(USART_SIM900, "+79697120710", USART_EXT) == 0) {
+		sim_reset(pwrKeyControlCallback);
+        gsm_wait_and_forward_sms();
+    }
+
     while(1);
 }

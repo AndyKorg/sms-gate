@@ -104,22 +104,32 @@ void usart_send_string(UsartModule_t usart, const char* str) {
 	}
 }
 
-// Прием строки до символа '\n' или '\r', либо пока не достигнут max_len - 1
-uint8_t usart_receive_string(UsartModule_t usart, char* buffer, uint8_t max_len) {
-	uint8_t i = 0;
-	uint8_t c;
+#include <util/delay.h>
 
-	while (i < (max_len - 1)) {
+// Прием строки до символа '\n' или '\r', либо пока не достигнут max_len - 1 или timeout
+uint8_t usart_receive_string(UsartModule_t usart, char* buffer, uint8_t max_len, uint16_t timeout_ms) {
+	uint8_t i = 0;
+	uint8_t c = 0;
+	uint16_t waited = 0;
+	const uint16_t poll_interval = 10; // 10 мс между проверками
+
+	while (i < (max_len - 1) && waited < timeout_ms) {
 		if (usart_getchar(usart, &c) == 0) {
 			if (c == '\n' || c == '\r') {
 				break;
 			}
 			buffer[i++] = c;
+			waited = 0; // сбрасываем таймер после успешного приема
+			} else {
+			_delay_ms(poll_interval);
+			waited += poll_interval;
 		}
 	}
+
 	buffer[i] = '\0'; // Завершаем строку
 	return i;
 }
+
 
 // Инлайн функции для обработки прерываний для каждого USART модуля
 static inline void usart_rx_interrupt(UsartModule_t usart) {
