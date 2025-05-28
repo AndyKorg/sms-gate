@@ -1,0 +1,101 @@
+#ifndef SIM900D_UART_H
+#define SIM900D_UART_H
+
+#include "driver/uart.h"
+
+/**
+ * @brief Структура, представляющая SMS-сообщение.
+ *
+ * Эта структура содержит информацию о полученном SMS-сообщении,
+ * включая его индекс в памяти, номер отправителя и текст сообщения.
+ *
+ * @typedef sms_message_t
+ * @param index   Индекс SMS-сообщения в памяти.
+ * @param sender  Нуль-терминированная строка с номером телефона отправителя (до 31 символа).
+ * @param text    Нуль-терминированная строка с текстом SMS-сообщения (до 160 символов).
+ */
+typedef struct {
+  int index;
+  char sender[32];
+  char text[161];
+} sms_message_t;
+
+/**
+ * @brief Тип функции обратного вызова для обработки входящих SMS-сообщений.
+ *
+ * Этот тип определяет функцию, которая вызывается при получении нового SMS-сообщения.
+ *
+ * @param sms Указатель на структуру sms_message_t, содержащую данные полученного SMS-сообщения.
+ */
+typedef void (*sms_callback_t)(const sms_message_t *sms);
+
+/**
+ * @brief Неопределённая структура для управления UART интерфейсом SIM900D.
+ *
+ * Этот typedef объявляет структуру sim900d_uart_handle_t, которая используется
+ * для работы с UART модулем SIM900D. Определение самой структуры находится в другом месте.
+ */
+typedef struct sim900d_uart_handle_t sim900d_uart_handle_t;
+
+/**
+ * @brief Устанавливает функцию обратного вызова для событий SMS на SIM900D UART.
+ *
+ * Эта функция назначает пользовательскую функцию обратного вызова, которая будет вызываться
+ * при получении SMS-сообщения на указанном дескрипторе SIM900D UART.
+ *
+ * @param handle Указатель на структуру дескриптора SIM900D UART.
+ * @param cb     Функция обратного вызова для обработки событий SMS.
+ */
+void sim900d_uart_set_callback(sim900d_uart_handle_t *handle, sms_callback_t cb);
+
+/**
+ * @brief Проверяет работоспособность SIM900D отправкой команды AT.
+ *
+ * @param handle Указатель на структуру sim900d_uart_handle_t.
+ * @param timeout_ms Таймаут ожидания ответа, мс.
+ * @return true если модуль отвечает "OK", false — если нет ответа или ошибка.
+ */
+bool sim900d_check_alive(sim900d_uart_handle_t *handle, uint32_t timeout_ms);
+
+/**
+ * @brief Сброс модуля SIM900D с помощью пина PWRKEY и чтение состояния STATUS.
+ *
+ * @param handle Указатель на структуру sim900d_uart_handle_t (может быть NULL, если не требуется).
+ *
+ * @return true если модуль успешно включён, false — если не удалось включить.
+ */
+bool sim900d_reset(sim900d_uart_handle_t *handle);
+
+/**
+ * @brief Деинициализирует UART для SIM900D и освобождает связанные ресурсы.
+ *
+ * Эта функция удаляет драйвер UART, освобождает очередь SMS (если она была создана),
+ * а также освобождает память, выделенную под структуру handle.
+ *
+ * @param handle Указатель на структуру sim900d_uart_handle_t, описывающую UART.
+ *               Если указатель равен NULL, функция ничего не делает.
+ */
+void sim900d_uart_deinit(sim900d_uart_handle_t *handle);
+
+/**
+ * @brief Инициализация UART-интерфейса SIM900D.
+ *
+ * Эта функция настраивает и инициализирует UART-интерфейс для связи с модулем SIM900D.
+ *
+ * @param[out] out_handle Указатель на переменную, куда будет сохранён инициализированный дескриптор UART.
+ * @param[in] uart_num Номер используемого UART-порта.
+ * @param[in] uart_config Указатель на структуру конфигурации UART.
+ * @param[in] txd_pin GPIO-номер для вывода TXD UART.
+ * @param[in] rxd_pin GPIO-номер для вывода RXD UART.
+ * @param[in] pwrkey_pin GPIO-номер для управления PWRKEY SIM900D.
+ * @param[in] status_pin GPIO-номер для чтения STATUS SIM900D.
+ *
+ * @return
+ *      - ESP_OK при успехе
+ *      - Соответствующий код ошибки esp_err_t в случае неудачи
+ */
+esp_err_t sim900d_uart_init(sim900d_uart_handle_t **out_handle, uart_port_t uart_num, const uart_config_t *uart_config,
+                            gpio_num_t txd_pin, gpio_num_t rxd_pin, gpio_num_t pwrkey_pin, gpio_num_t status_pin,
+                            gpio_num_t ri_pin);
+
+#endif // SIM900D_UART_H
