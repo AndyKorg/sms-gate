@@ -12,15 +12,15 @@
 
 #define UART_BUF_SIZE 1024
 
-#define SIM900D_CMD_AT           "AT"
-#define SIM900D_CMD_SMS_MODE     "AT+CMGF=1"
-#define SIM900D_CMD_SMS_NOTIFY   "AT+CNMI=2,1,0,0,0"
+#define SIM900D_CMD_AT "AT"
+#define SIM900D_CMD_SMS_MODE "AT+CMGF=1"
+#define SIM900D_CMD_SMS_NOTIFY "AT+CNMI=2,1,0,0,0"
 #define SIM900D_CMD_READ_SMS_FMT "AT+CMGR=%d"
 
-#define SIM900D_RESP_OK        "OK"
-#define SIM900D_RESP_ERROR     "ERROR"
-#define SIM900D_RESP_CMTI      "+CMTI:"
-#define SIM900D_RESP_CMGR      "+CMGR:"
+#define SIM900D_RESP_OK "OK"
+#define SIM900D_RESP_ERROR "ERROR"
+#define SIM900D_RESP_CMTI "+CMTI:"
+#define SIM900D_RESP_CMGR "+CMGR:"
 
 typedef struct {
   uart_port_t uart_num;
@@ -30,7 +30,7 @@ typedef struct {
   TaskHandle_t sms_task_handle;
   gpio_num_t pwrkey_gpio;
   gpio_num_t status_gpio;
-  gpio_num_t ri_gpio; //Может быть неопределен
+  gpio_num_t ri_gpio; // Может быть неопределен
 } sim900d_uart_handle_t_internal;
 
 struct sim900d_uart_handle_t {
@@ -56,12 +56,14 @@ static int sim900d_send_at(sim900d_uart_handle_t *handle, const char *cmd, char 
   uart_write_bytes(handle->internal.uart_num, cmd, strlen(cmd));
   uart_write_bytes(handle->internal.uart_num, "\r\n", 2);
 
-  int len = uart_read_bytes(handle->internal.uart_num, (uint8_t *)response, resp_size - 1, timeout);
-  if (len > 0) {
-    response[len] = 0;
-    return len;
+  if (response) {
+    int len = uart_read_bytes(handle->internal.uart_num, (uint8_t *)response, resp_size - 1, timeout);
+    if (len > 0) {
+      response[len] = 0;
+      return len;
+    }
+    response[0] = 0;
   }
-  response[0] = 0;
   return 0;
 }
 

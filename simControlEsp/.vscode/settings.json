@@ -13,5 +13,7 @@
   "files.associations": {
     "esp_flash.h": "c",
     "esp_err.h": "c"
-  }
+  },
+  "idf.flashType": "UART",
+  "idf.portWin": "COM15"
 }
