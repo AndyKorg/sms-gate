@@ -157,8 +157,8 @@ static int sim900d_send_at(sim900d_uart_handle_t *handle, const char *cmd, char 
       return len;
     }
     response[0] = 0;
+    ESP_LOGV(TAG, "SIM900D->UART: <no response>");
   }
-  ESP_LOGV(TAG, "SIM900D->UART: <no response>");
   return 0;
 }
 
@@ -289,7 +289,7 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
     STATE_AT,
     STATE_CPIN,
     STATE_CREG,
-    STATE_CGREG,
+    STATE_CGREG, 
     STATE_CSQ,
     STATE_COPS,
     STATE_DONE,
@@ -329,19 +329,47 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
       }
       break;
 
-    case STATE_CREG:
+    case STATE_CREG: {
       sim900d_send_at(handle, SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
       if (sim900d_wait_for_response(handle, SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
-        if (sscanf(resp, "+CREG: 0,%d", &creg) == 1 && (creg == 1 || creg == 5)) {
-          state = STATE_CGREG;
+        if (sscanf(resp, "+CREG: 0,%d", &creg) == 1) {
+          if (creg == 1 || creg == 5) {
+            state = STATE_CGREG;
+          } else if (creg == 2) {
+            // Ожидание сети до 60 секунд, если модуль в режиме поиска сети
+            ESP_LOGW(TAG, "Network searching, waiting up to 60 seconds...");
+            int waited = 0;
+            bool registered = false;
+            while (waited < 60000) {
+              vTaskDelay(pdMS_TO_TICKS(1000));
+              waited += 1000;
+              sim900d_send_at(handle, SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
+              if (sim900d_wait_for_response(handle, SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
+                if (sscanf(resp, "+CREG: 0,%d", &creg) == 1 && (creg == 1 || creg == 5)) {
+                  registered = true;
+                  break;
+                }
+              }
+            }
+            if (registered) {
+              ESP_LOGI(TAG, "Network registered after waiting");
+              state = STATE_CGREG;
+            } else {
+              ESP_LOGE(TAG, "Network registration timeout");
+              state = STATE_ERROR;
+            }
+          } else {
+            ESP_LOGW(TAG, "CREG not registered: %s", resp);
+            state = STATE_ERROR;
+          }
         } else {
-          ESP_LOGW(TAG, "CREG not registered: %s", resp);
           state = STATE_ERROR;
         }
       } else {
         state = STATE_ERROR;
       }
       break;
+    }
 
     case STATE_CGREG:
       sim900d_send_at(handle, SIM900D_CMD_CGREG, NULL, 0, pdMS_TO_TICKS(500));
@@ -350,7 +378,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
           state = STATE_CSQ;
         } else {
           ESP_LOGW(TAG, "CGREG not registered: %s", resp);
-          state = STATE_ERROR;
+          // state = STATE_ERROR; GPRS Пока не важен
+          state = STATE_CSQ;
         }
       } else {
         state = STATE_ERROR;
@@ -395,7 +424,7 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
       if (++retry_count < attmpt_count) {
         ESP_LOGW(TAG, "FSM retry %d/3", retry_count);
         state = STATE_AT;
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
       } else {
         ESP_LOGE(TAG, "FSM failed");
         break;
@@ -478,7 +507,7 @@ bool sim900d_reset(sim900d_uart_handle_t *handle, uint32_t timeout_ms) {
   gpio_set_level(pwrkey_gpio, 1);
 
   uint32_t waited = 0;
-  while (gpio_get_level(status_gpio) == 0 && waited < (timeout_ms+3000)) {
+  while (gpio_get_level(status_gpio) == 0 && waited < (timeout_ms + 3000)) {
     vTaskDelay(pdMS_TO_TICKS(100));
     waited += 100;
   }

@@ -86,7 +86,7 @@ static void reboot_reason_check() {
 
 void app_main(void) {
   esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
-  
+
   reboot_reason_check();
   console_start();
 
@@ -99,10 +99,15 @@ void app_main(void) {
                         SIM900D_PWRKEY, SIM900D_STATUS, SIM900D_RI) == ESP_OK) {
     sim900d_uart_set_callback(sim900d_handle, sms_received_callback);
     ESP_LOGV(TAG, "SIM900D UART initialized");
-    if (sim900d_reset(sim900d_handle, 10000)){
-      sim900d_network_start(sim900d_handle, 3);
-    }
-    else {
+    if (sim900d_reset(sim900d_handle, 10000)) {
+      int baud = sim900d_uart_autobaud(sim900d_handle, 1000);
+      if (baud > 0) {
+        ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
+        sim900d_network_start(sim900d_handle, 10);
+      } else {
+        ESP_LOGE(TAG, "Failed auto-baud SIM900D");
+      }
+    } else {
       ESP_LOGE(TAG, "Failed to reset SIM900D");
     }
   } else {

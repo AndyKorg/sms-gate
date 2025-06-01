@@ -61,7 +61,7 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count);
 bool sim900d_check_alive(sim900d_uart_handle_t *handle, uint32_t timeout_ms);
 
 /**
- * @brief Сброс модуля SIM900D с помощью пина PWRKEY и чтение состояния STATUS.
+ * @brief Жесткий сброс модуля SIM900D с помощью пина PWRKEY и чтение состояния пина STATUS.
  *
  * @param handle Указатель на структуру sim900d_uart_handle_t (может быть NULL, если не требуется).
  * @param timeout_ms Таймаут ожидания ответа, мс.
@@ -69,6 +69,8 @@ bool sim900d_check_alive(sim900d_uart_handle_t *handle, uint32_t timeout_ms);
  * @return true если модуль успешно включён, false — если не удалось включить.
  */
 bool sim900d_reset(sim900d_uart_handle_t *handle, const uint32_t timeout_ms);
+
+int sim900d_uart_autobaud(sim900d_uart_handle_t *handle, uint32_t timeout_ms);
 
 /**
  * @brief Деинициализирует UART для SIM900D и освобождает связанные ресурсы.
