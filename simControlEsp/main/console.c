@@ -1,8 +1,9 @@
 #include "driver/uart.h"
+#include "driver/uart_vfs.h"
 #include "esp_console.h"
 #include "esp_log.h"
-#include "linenoise/linenoise.h"
 #include "esp_vfs_dev.h"
+#include "linenoise/linenoise.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -11,17 +12,6 @@
 #define UART_RX_BUF_SIZE 1024
 
 static const char *TAG = "console";
-
-/* UART initialization for console */
-static void uart_console_init(void) {
-  const uart_config_t uart_config = {.baud_rate = 115200,
-                                     .data_bits = UART_DATA_8_BITS,
-                                     .parity = UART_PARITY_DISABLE,
-                                     .stop_bits = UART_STOP_BITS_1,
-                                     .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
-  uart_param_config(UART_NUM, &uart_config);
-  uart_driver_install(UART_NUM, UART_RX_BUF_SIZE * 2, 0, 0, NULL, 0);
-}
 
 /* Example command handler */
 static int cmd_hello(int argc, char **argv) {
@@ -110,7 +100,7 @@ void console_start(void) { /* Drain stdout before reconfiguring it */
   ESP_ERROR_CHECK(uart_param_config(CONFIG_ESP_CONSOLE_UART_NUM, &uart_config));
 
   /* Tell VFS to use UART driver */
-  esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+  uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
 
   /* Initialize the console */
   // @formatter:off
@@ -150,7 +140,7 @@ void console_start(void) { /* Drain stdout before reconfiguring it */
   /* Figure out if the terminal supports escape sequences */
   int probe_status = linenoiseProbe();
   if (probe_status) { /* zero indicates success */
-    printf("Your terminal application does not support escape sequences.");
+    // printf("Your terminal application does not support escape sequences.");
     linenoiseSetDumbMode(1);
 #if CONFIG_LOG_COLORS
     /* Since the terminal doesn't support escape sequences,

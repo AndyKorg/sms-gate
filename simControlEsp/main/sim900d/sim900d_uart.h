@@ -48,6 +48,9 @@ typedef struct sim900d_uart_handle_t sim900d_uart_handle_t;
  */
 void sim900d_uart_set_callback(sim900d_uart_handle_t *handle, sms_callback_t cb);
 
+
+void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count);
+
 /**
  * @brief Проверяет работоспособность SIM900D отправкой команды AT.
  *
@@ -61,10 +64,11 @@ bool sim900d_check_alive(sim900d_uart_handle_t *handle, uint32_t timeout_ms);
  * @brief Сброс модуля SIM900D с помощью пина PWRKEY и чтение состояния STATUS.
  *
  * @param handle Указатель на структуру sim900d_uart_handle_t (может быть NULL, если не требуется).
+ * @param timeout_ms Таймаут ожидания ответа, мс.
  *
  * @return true если модуль успешно включён, false — если не удалось включить.
  */
-bool sim900d_reset(sim900d_uart_handle_t *handle);
+bool sim900d_reset(sim900d_uart_handle_t *handle, const uint32_t timeout_ms);
 
 /**
  * @brief Деинициализирует UART для SIM900D и освобождает связанные ресурсы.

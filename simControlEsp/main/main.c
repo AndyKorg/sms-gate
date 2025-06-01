@@ -1,6 +1,5 @@
 #include "esp_chip_info.h"
 #include "esp_flash.h"
-#include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -10,12 +9,16 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
+#include "esp_log.h"
+
 #include "console.h"
-#include "sim900d_uart.h"
+#include "sim900d/sim900d_uart.h"
 
 #define SIM900D_UART_NUM UART_NUM_1
-#define SIM900D_UART_TX GPIO_NUM_10
-#define SIM900D_UART_RX GPIO_NUM_10
+#define SIM900D_UART_TX GPIO_NUM_17
+#define SIM900D_UART_RX GPIO_NUM_16
 #define SIM900D_PWRKEY GPIO_NUM_23
 #define SIM900D_STATUS GPIO_NUM_22
 #define SIM900D_RI GPIO_NUM_33
@@ -82,6 +85,8 @@ static void reboot_reason_check() {
 }
 
 void app_main(void) {
+  esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
+  
   reboot_reason_check();
   console_start();
 
@@ -94,6 +99,12 @@ void app_main(void) {
                         SIM900D_PWRKEY, SIM900D_STATUS, SIM900D_RI) == ESP_OK) {
     sim900d_uart_set_callback(sim900d_handle, sms_received_callback);
     ESP_LOGV(TAG, "SIM900D UART initialized");
+    if (sim900d_reset(sim900d_handle, 10000)){
+      sim900d_network_start(sim900d_handle, 3);
+    }
+    else {
+      ESP_LOGE(TAG, "Failed to reset SIM900D");
+    }
   } else {
     ESP_LOGE(TAG, "Failed to initialize SIM900D UART");
   }
