@@ -1,9 +1,23 @@
 #ifndef SIM900D_PARSER_H
 #define SIM900D_PARSER_H
 
+/**
+ * @def MAX_PARAMS
+ * Максимальное количество параметров, которые может обработать парсер.
+ */
 #define MAX_PARAMS 10
+
+/**
+ * @def MAX_PARAM_LEN
+ * Максимальная длина одного параметра (в символах).
+ */
 #define MAX_PARAM_LEN 64
-#define MAX_HANDLERS 10
+
+/**
+ * @def MAX_HANDLERS
+ * Максимальное количество обработчиков команд, поддерживаемых парсером.
+ */
+#define MAX_HANDLERS 20
 
 typedef struct {
     char params[MAX_PARAMS][MAX_PARAM_LEN];
@@ -33,8 +47,12 @@ typedef void (*Sim900dHandler)(Sim900dParsedParams* params);
  *
  * @param prefix Префикс строки (например, "+CMTI", "+CMGR").
  * @param handler Функция-обработчик, вызываемая при совпадении префикса.
- */
-void sim900d_register_handler(const char* prefix, Sim900dHandler handler);
+ * 
+ * @return
+ *      - ESP_OK при успехе
+ *      - Соответствующий код ошибки esp_err_t в случае неудачи
+*/
+esp_err_t sim900d_register_handler(const char* prefix, Sim900dHandler handler);
 
 /**
  * @brief Парсинг входящей строки от SIM900D и вызов соответствующего обработчика.

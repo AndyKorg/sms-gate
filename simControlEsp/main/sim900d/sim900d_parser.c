@@ -1,7 +1,9 @@
-// sim900d_parser.c
-#include "sim900d_parser.h"
 #include <string.h>
 #include <stdio.h>
+#include "esp_err.h"
+
+#include "sim900d_command.h"
+#include "sim900d_parser.h"
 
 /**
  * @brief Состояния парсера для обработки однострочных и многострочных ответов.
@@ -30,7 +32,10 @@ void sim900d_parser_init() {
     }
 }
 
-void sim900d_register_handler(const char* prefix, Sim900dHandler handler) {
+esp_err_t sim900d_register_handler(const char* prefix, Sim900dHandler handler) {
+    if (prefix == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     for (int i = 0; i < handlerCount; i++) {
         if (strcmp(handlerPrefixes[i], prefix) == 0) {
             if (handler == NULL) {
@@ -40,22 +45,25 @@ void sim900d_register_handler(const char* prefix, Sim900dHandler handler) {
                     handlerTable[j] = handlerTable[j + 1];
                 }
                 handlerCount--;
+                return ESP_OK;
             } else {
                 handlerTable[i] = handler;
+                return ESP_OK;
             }
-            return;
         }
     }
     if (handler != NULL && handlerCount < MAX_HANDLERS) {
         handlerPrefixes[handlerCount] = prefix;
         handlerTable[handlerCount] = handler;
         handlerCount++;
+        return ESP_OK;
     }
+    return ESP_ERR_NO_MEM;
 }
 
 void sim900d_parse_line(const char* line) {
     if (currentState == STATE_ACCUMULATING_MULTILINE) {
-        if (strcmp(line, "OK") == 0 || strcmp(line, "ERROR") == 0) {
+        if (strcmp(line, SIM900D_CODE_OK) == 0 || strcmp(line, SIM900D_CODE_ERROR) == 0) {
             strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody));
             if (currentHandler) {
                 currentHandler(&currentParams);

@@ -6,6 +6,7 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #undef LOG_LOCAL_LEVEL
@@ -15,9 +16,8 @@
 static const char *TAG = "SIM900";
 
 #include "sim900d_command.h"
+#include "sim900d_parser.h"
 #include "sim900d_uart.h"
-
-#define UART_BUF_SIZE 1024
 
 typedef struct {
   uart_port_t uart_num;
@@ -28,11 +28,57 @@ typedef struct {
   gpio_num_t pwrkey_gpio;
   gpio_num_t status_gpio;
   gpio_num_t ri_gpio; // Может быть неопределен
+  uint32_t flags;
+  SemaphoreHandle_t flags_mutex;
 } sim900d_uart_handle_t_internal;
 
 struct sim900d_uart_handle_t {
   sim900d_uart_handle_t_internal internal;
 };
+
+#define UART_BUF_SIZE 1024
+
+#define SIM900D_FLAG_UART_INSTALL (1 << 0) // Флаг инсталяции uart драйвера
+#define SIM900D_FLAG_REGISTERED (1 << 1)   // Флаг регистрации в сети
+
+#pragma region flagControl
+
+/**
+ * @brief Установить флаги (битовая маска)
+ */
+void sim900d_flags_set(sim900d_uart_handle_t *handle, uint32_t flags) {
+  if (handle && handle->internal.flags_mutex) {
+    xSemaphoreTake(handle->internal.flags_mutex, portMAX_DELAY);
+    handle->internal.flags |= flags;
+    xSemaphoreGive(handle->internal.flags_mutex);
+  }
+}
+
+/**
+ * @brief Сбросить флаги (битовая маска)
+ */
+void sim900d_flags_clear(sim900d_uart_handle_t *handle, uint32_t flags) {
+  if (handle && handle->internal.flags_mutex) {
+    xSemaphoreTake(handle->internal.flags_mutex, portMAX_DELAY);
+    handle->internal.flags &= ~flags;
+    xSemaphoreGive(handle->internal.flags_mutex);
+  }
+}
+
+/**
+ * @brief Получить текущее значение флагов
+ */
+uint32_t sim900d_flags_get(sim900d_uart_handle_t *handle) {
+  uint32_t flags = 0;
+  if (handle && handle->internal.flags_mutex) {
+    xSemaphoreTake(handle->internal.flags_mutex, portMAX_DELAY);
+    flags = handle->internal.flags;
+    xSemaphoreGive(handle->internal.flags_mutex);
+  }
+  return flags;
+}
+
+#pragma endregion
 
 // Список поддерживаемых скоростей UART для SIM900D
 static const int baud_list[] = {115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200};
@@ -115,7 +161,7 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
     STATE_AT,
     STATE_CPIN,
     STATE_CREG,
-    STATE_CGREG, 
+    STATE_CGREG,
     STATE_CSQ,
     STATE_COPS,
     STATE_DONE,
@@ -347,6 +393,30 @@ bool sim900d_reset(sim900d_uart_handle_t *handle, uint32_t timeout_ms) {
   }
 }
 
+void creg_handler(Sim900dParsedParams *params, sim900d_uart_handle_t *handle) {
+  // ...парсинг params...
+  // если зарегистрирован:
+  sim900d_flags_set(handle, SIM900D_FLAG_REGISTERED);
+  // если потеря регистрации:
+  // sim900d_flags_clear(handle, SIM900D_FLAG_REGISTERED);
+}
+
+// Вспомогательная функция для освобождения ресурсов handle
+static void sim900d_uart_free_handle(sim900d_uart_handle_t *handle) {
+  if (!handle)
+    return;
+  if (handle->internal.sms_queue) {
+    vQueueDelete(handle->internal.sms_queue);
+    handle->internal.sms_queue = NULL;
+  }
+  if (sim900d_flags_get(handle) & SIM900D_FLAG_UART_INSTALL) {
+    uart_driver_delete(handle->internal.uart_num);
+  }
+  if (handle->internal.flags_mutex)
+    vSemaphoreDelete(handle->internal.flags_mutex);
+  free(handle);
+}
+
 esp_err_t sim900d_uart_init(sim900d_uart_handle_t **out_handle, uart_port_t uart_num, const uart_config_t *uart_config,
                             gpio_num_t txd_pin, gpio_num_t rxd_pin, gpio_num_t pwrkey_pin, gpio_num_t status_pin,
                             gpio_num_t ri_pin) {
@@ -368,27 +438,25 @@ esp_err_t sim900d_uart_init(sim900d_uart_handle_t **out_handle, uart_port_t uart
   handle->internal.pwrkey_gpio = pwrkey_pin;
   handle->internal.status_gpio = status_pin;
   handle->internal.ri_gpio = ri_pin;
+  handle->internal.flags = 0;
+  handle->internal.flags_mutex = xSemaphoreCreateMutex();
 
-  if (!handle->internal.sms_queue) {
-    free(handle);
+  if (!handle->internal.sms_queue || !handle->internal.flags_mutex) {
+    sim900d_uart_free_handle(handle);
     return ESP_ERR_NO_MEM;
   }
 
   if (uart_driver_install(uart_num, UART_BUF_SIZE * 2, 0, 0, NULL, 0) != ESP_OK) {
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    sim900d_uart_free_handle(handle);
     return ESP_FAIL;
   }
+  sim900d_flags_set(handle, SIM900D_FLAG_UART_INSTALL);
   if (uart_param_config(uart_num, uart_config) != ESP_OK) {
-    uart_driver_delete(uart_num);
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    sim900d_uart_free_handle(handle);
     return ESP_ERR_INVALID_ARG;
   }
   if (uart_set_pin(uart_num, txd_pin, rxd_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE) != ESP_OK) {
-    uart_driver_delete(uart_num);
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    sim900d_uart_free_handle(handle);
     return ESP_ERR_INVALID_ARG;
   }
 
@@ -406,13 +474,14 @@ esp_err_t sim900d_uart_init(sim900d_uart_handle_t **out_handle, uart_port_t uart
   // }
   if (xTaskCreate(sim900d_sms_task, "sim900d_sms_task", 4096, handle, 10, &handle->internal.sms_task_handle) !=
       pdPASS) {
-    uart_driver_delete(uart_num);
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    sim900d_uart_free_handle(handle);
     return ESP_ERR_NO_MEM;
   }
 
   *out_handle = handle;
+
+  sim900d_register_handler();
+
   return ESP_OK;
 }
 
@@ -429,8 +498,5 @@ void sim900d_uart_deinit(sim900d_uart_handle_t *handle) {
     vTaskDelete(handle->internal.uart_task_handle);
   if (handle->internal.sms_task_handle)
     vTaskDelete(handle->internal.sms_task_handle);
-  uart_driver_delete(handle->internal.uart_num);
-  if (handle->internal.sms_queue)
-    vQueueDelete(handle->internal.sms_queue);
-  free(handle);
+  sim900d_uart_free_handle(handle);
 }
