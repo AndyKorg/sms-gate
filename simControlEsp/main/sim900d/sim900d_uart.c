@@ -28,39 +28,35 @@ typedef struct {
   gpio_num_t pwrkey_gpio;
   gpio_num_t status_gpio;
   gpio_num_t ri_gpio; // Может быть неопределен
-} sim900d_uart_handle_t_internal;
+} sim900d_uart_handle_t;
 
-struct sim900d_uart_handle_t {
-  sim900d_uart_handle_t_internal internal;
-};
+static sim900d_uart_handle_t handle;
 
 // Список поддерживаемых скоростей UART для SIM900D
 static const int baud_list[] = {115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200};
 
 static void sim900d_sms_task(void *pvParameters) {
-  sim900d_uart_handle_t *handle = (sim900d_uart_handle_t *)pvParameters;
   sms_message_t sms;
 
   while (1) {
-    if (xQueueReceive(handle->internal.sms_queue, &sms, portMAX_DELAY) == pdTRUE) {
-      if (handle->internal.sms_queue) {
-        handle->internal.sms_cb(&sms);
+    if (xQueueReceive(handle.sms_queue, &sms, portMAX_DELAY) == pdTRUE) {
+      if (handle.sms_queue) {
+        handle.sms_cb(&sms);
       }
     }
   }
 }
 
 // Отправка AT-команды и ожидание ответа с логированием
-static int sim900d_send_at(sim900d_uart_handle_t *handle, const char *cmd, char *response, size_t resp_size,
-                           TickType_t timeout) {
+static int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_t timeout) {
   // Логируем отправляемую команду
   ESP_LOGV(TAG, "UART->SIM900D: %s", cmd);
 
-  uart_write_bytes(handle->internal.uart_num, cmd, strlen(cmd));
-  uart_write_bytes(handle->internal.uart_num, "\r\n", 2);
+  uart_write_bytes(handle.uart_num, cmd, strlen(cmd));
+  uart_write_bytes(handle.uart_num, "\r\n", 2);
 
   if (response) {
-    int len = uart_read_bytes(handle->internal.uart_num, (uint8_t *)response, resp_size - 1, timeout);
+    int len = uart_read_bytes(handle.uart_num, (uint8_t *)response, resp_size - 1, timeout);
     if (len > 0) {
       response[len] = 0;
       // Логируем полученный ответ
@@ -74,14 +70,13 @@ static int sim900d_send_at(sim900d_uart_handle_t *handle, const char *cmd, char 
 }
 
 // FSM: ожидание строки по шаблону
-static bool sim900d_wait_for_response(sim900d_uart_handle_t *handle, const char *expected, char *out_buf,
-                                      size_t out_buf_len, int timeout_ms) {
+static bool sim900d_wait_for_response(const char *expected, char *out_buf, size_t out_buf_len, int timeout_ms) {
   char line[256] = {0};
   int offset = 0;
   int waited = 0;
 
   while (waited < timeout_ms) {
-    int len = uart_read_bytes(handle->internal.uart_num, (uint8_t *)line + offset, 1, pdMS_TO_TICKS(100));
+    int len = uart_read_bytes(handle.uart_num, (uint8_t *)line + offset, 1, pdMS_TO_TICKS(100));
     if (len == 1) {
       if (line[offset] == '\n') {
         line[offset + 1] = '\0';
@@ -110,12 +105,12 @@ static bool sim900d_wait_for_response(sim900d_uart_handle_t *handle, const char 
 }
 
 // FSM: старт проверки сети
-void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
+void sim900d_network_start(int attmpt_count) {
   typedef enum {
     STATE_AT,
     STATE_CPIN,
     STATE_CREG,
-    STATE_CGREG, 
+    STATE_CGREG,
     STATE_CSQ,
     STATE_COPS,
     STATE_DONE,
@@ -133,8 +128,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
   while (state != STATE_DONE && state != STATE_ERROR) {
     switch (state) {
     case STATE_AT:
-      sim900d_send_at(handle, SIM900D_CMD_AT, NULL, 0, pdMS_TO_TICKS(500));
-      if (sim900d_wait_for_response(handle, SIM900D_RESP_OK, NULL, 0, 2000)) {
+      sim900d_send_at(SIM900D_CMD_AT, NULL, 0, pdMS_TO_TICKS(500));
+      if (sim900d_wait_for_response(SIM900D_RESP_OK, NULL, 0, 2000)) {
         state = STATE_CPIN;
       } else {
         state = STATE_ERROR;
@@ -142,8 +137,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
       break;
 
     case STATE_CPIN:
-      sim900d_send_at(handle, SIM900D_CMD_CPIN, NULL, 0, pdMS_TO_TICKS(500));
-      if (sim900d_wait_for_response(handle, SIM900D_RESP_CPIN, resp, sizeof(resp), 2000)) {
+      sim900d_send_at(SIM900D_CMD_CPIN, NULL, 0, pdMS_TO_TICKS(500));
+      if (sim900d_wait_for_response(SIM900D_RESP_CPIN, resp, sizeof(resp), 2000)) {
         if (strstr(resp, "READY")) {
           state = STATE_CREG;
         } else {
@@ -156,8 +151,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
       break;
 
     case STATE_CREG: {
-      sim900d_send_at(handle, SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
-      if (sim900d_wait_for_response(handle, SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
+      sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
+      if (sim900d_wait_for_response(SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
         if (sscanf(resp, "+CREG: 0,%d", &creg) == 1) {
           if (creg == 1 || creg == 5) {
             state = STATE_CGREG;
@@ -169,8 +164,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
             while (waited < 60000) {
               vTaskDelay(pdMS_TO_TICKS(1000));
               waited += 1000;
-              sim900d_send_at(handle, SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
-              if (sim900d_wait_for_response(handle, SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
+              sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
+              if (sim900d_wait_for_response(SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
                 if (sscanf(resp, "+CREG: 0,%d", &creg) == 1 && (creg == 1 || creg == 5)) {
                   registered = true;
                   break;
@@ -198,8 +193,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
     }
 
     case STATE_CGREG:
-      sim900d_send_at(handle, SIM900D_CMD_CGREG, NULL, 0, pdMS_TO_TICKS(500));
-      if (sim900d_wait_for_response(handle, SIM900D_RESP_CGREG, resp, sizeof(resp), 2000)) {
+      sim900d_send_at(SIM900D_CMD_CGREG, NULL, 0, pdMS_TO_TICKS(500));
+      if (sim900d_wait_for_response(SIM900D_RESP_CGREG, resp, sizeof(resp), 2000)) {
         if (sscanf(resp, "+CGREG: 0,%d", &cgreg) == 1 && (cgreg == 1 || cgreg == 5)) {
           state = STATE_CSQ;
         } else {
@@ -213,8 +208,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
       break;
 
     case STATE_CSQ:
-      sim900d_send_at(handle, SIM900D_CMD_CSQ, NULL, 0, pdMS_TO_TICKS(500));
-      if (sim900d_wait_for_response(handle, SIM900D_RESP_CSQ, resp, sizeof(resp), 2000)) {
+      sim900d_send_at(SIM900D_CMD_CSQ, NULL, 0, pdMS_TO_TICKS(500));
+      if (sim900d_wait_for_response(SIM900D_RESP_CSQ, resp, sizeof(resp), 2000)) {
         if (sscanf(resp, "+CSQ: %d", &csq) == 1) {
           int dBm = -113 + 2 * csq;
           ESP_LOGI(TAG, "Signal strength: %d (%d dBm)", csq, dBm);
@@ -228,8 +223,8 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
       break;
 
     case STATE_COPS:
-      sim900d_send_at(handle, SIM900D_CMD_COPS, NULL, 0, pdMS_TO_TICKS(500));
-      if (sim900d_wait_for_response(handle, SIM900D_RESP_COPS, resp, sizeof(resp), 2000)) {
+      sim900d_send_at(SIM900D_CMD_COPS, NULL, 0, pdMS_TO_TICKS(500));
+      if (sim900d_wait_for_response(SIM900D_RESP_COPS, resp, sizeof(resp), 2000)) {
         if (sscanf(resp, "+COPS: 0,0,\"%31[^\"]\"", operator_name) == 1) {
           ESP_LOGI(TAG, "Operator: %s", operator_name);
           state = STATE_DONE;
@@ -263,22 +258,20 @@ void sim900d_network_start(sim900d_uart_handle_t *handle, int attmpt_count) {
   }
 }
 
-int sim900d_uart_autobaud(sim900d_uart_handle_t *handle, uint32_t timeout_ms) {
-  if (!handle)
-    return -1;
+int sim900d_uart_autobaud(uint32_t timeout_ms) {
   if (timeout_ms == 0)
     timeout_ms = 1000;
 
   size_t baud_count = sizeof(baud_list) / sizeof(baud_list[0]);
 
-  uart_port_t uart_num = handle->internal.uart_num;
+  uart_port_t uart_num = handle.uart_num;
   for (size_t i = 0; i < baud_count; ++i) {
     uart_set_baudrate(uart_num, baud_list[i]);
     uart_flush(uart_num);
 
     // Отправляем AT и ждём OK
     char resp[64];
-    int len = sim900d_send_at(handle, SIM900D_CMD_AT, resp, sizeof(resp), pdMS_TO_TICKS(timeout_ms));
+    int len = sim900d_send_at(SIM900D_CMD_AT, resp, sizeof(resp), pdMS_TO_TICKS(timeout_ms));
     if (len > 0 && strstr(resp, SIM900D_CMD_AT)) {
       ESP_LOGI(TAG, "SIM900D autobaud success: %d", baud_list[i]);
       return baud_list[i];
@@ -289,18 +282,13 @@ int sim900d_uart_autobaud(sim900d_uart_handle_t *handle, uint32_t timeout_ms) {
   return -1;
 }
 
-bool sim900d_check_alive(sim900d_uart_handle_t *handle, const uint32_t timeout_ms) {
-  if (!handle)
-    return false;
-  return sim900d_wait_for_response(handle, SIM900D_RESP_OK, NULL, 0, 2000);
+bool sim900d_check_alive(const uint32_t timeout_ms) {
+  return sim900d_wait_for_response(SIM900D_RESP_OK, NULL, 0, 2000);
 }
 
-bool sim900d_reset(sim900d_uart_handle_t *handle, uint32_t timeout_ms) {
-  if (!handle)
-    return false;
-
-  gpio_num_t status_gpio = handle->internal.status_gpio;
-  gpio_num_t pwrkey_gpio = handle->internal.pwrkey_gpio;
+bool sim900d_reset(uint32_t timeout_ms) {
+  gpio_num_t status_gpio = handle.status_gpio;
+  gpio_num_t pwrkey_gpio = handle.pwrkey_gpio;
   if ((status_gpio == GPIO_NUM_NC) || (pwrkey_gpio == GPIO_NUM_NC)) {
     return false;
   }
@@ -347,48 +335,39 @@ bool sim900d_reset(sim900d_uart_handle_t *handle, uint32_t timeout_ms) {
   }
 }
 
-esp_err_t sim900d_uart_init(sim900d_uart_handle_t **out_handle, uart_port_t uart_num, const uart_config_t *uart_config,
-                            gpio_num_t txd_pin, gpio_num_t rxd_pin, gpio_num_t pwrkey_pin, gpio_num_t status_pin,
-                            gpio_num_t ri_pin) {
-  if (!out_handle || !uart_config || (txd_pin == GPIO_NUM_NC) || (rxd_pin == GPIO_NUM_NC) ||
-      (pwrkey_pin == GPIO_NUM_NC) || (status_pin == GPIO_NUM_NC))
+esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_config, gpio_num_t txd_pin,
+                            gpio_num_t rxd_pin, gpio_num_t pwrkey_pin, gpio_num_t status_pin, gpio_num_t ri_pin) {
+  if (!uart_config || (txd_pin == GPIO_NUM_NC) || (rxd_pin == GPIO_NUM_NC) || (pwrkey_pin == GPIO_NUM_NC) ||
+      (status_pin == GPIO_NUM_NC))
     return ESP_ERR_INVALID_ARG;
 
 #if CONFIG_LOG_DEFAULT_LEVEL > 1
   esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
 #endif
 
-  sim900d_uart_handle_t *handle = calloc(1, sizeof(sim900d_uart_handle_t));
-  if (!handle)
-    return ESP_ERR_NO_MEM;
+  handle.uart_num = uart_num;
+  handle.sms_queue = xQueueCreate(8, sizeof(sms_message_t));
+  handle.sms_cb = NULL;
+  handle.pwrkey_gpio = pwrkey_pin;
+  handle.status_gpio = status_pin;
+  handle.ri_gpio = ri_pin;
 
-  handle->internal.uart_num = uart_num;
-  handle->internal.sms_queue = xQueueCreate(8, sizeof(sms_message_t));
-  handle->internal.sms_cb = NULL;
-  handle->internal.pwrkey_gpio = pwrkey_pin;
-  handle->internal.status_gpio = status_pin;
-  handle->internal.ri_gpio = ri_pin;
-
-  if (!handle->internal.sms_queue) {
-    free(handle);
+  if (!handle.sms_queue) {
     return ESP_ERR_NO_MEM;
   }
 
   if (uart_driver_install(uart_num, UART_BUF_SIZE * 2, 0, 0, NULL, 0) != ESP_OK) {
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    vQueueDelete(handle.sms_queue);
     return ESP_FAIL;
   }
   if (uart_param_config(uart_num, uart_config) != ESP_OK) {
     uart_driver_delete(uart_num);
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    vQueueDelete(handle.sms_queue);
     return ESP_ERR_INVALID_ARG;
   }
   if (uart_set_pin(uart_num, txd_pin, rxd_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE) != ESP_OK) {
     uart_driver_delete(uart_num);
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    vQueueDelete(handle.sms_queue);
     return ESP_ERR_INVALID_ARG;
   }
 
@@ -398,39 +377,29 @@ esp_err_t sim900d_uart_init(sim900d_uart_handle_t **out_handle, uart_port_t uart
   gpio_set_direction(status_pin, GPIO_MODE_INPUT);
   gpio_set_pull_mode(status_pin, GPIO_FLOATING);
 
-  // if (xTaskCreate(uart_task, "sim900d_uart_task", 4096, handle, 10, &handle->internal.uart_task_handle) != pdPASS) {
+  // if (xTaskCreate(uart_task, "sim900d_uart_task", 4096, handle, 10, &handle->uart_task_handle) != pdPASS) {
   //   uart_driver_delete(uart_num);
-  //   vQueueDelete(handle->internal.sms_queue);
+  //   vQueueDelete(handle->sms_queue);
   //   free(handle);
   //   return ESP_ERR_NO_MEM;
   // }
-  if (xTaskCreate(sim900d_sms_task, "sim900d_sms_task", 4096, handle, 10, &handle->internal.sms_task_handle) !=
-      pdPASS) {
+  if (xTaskCreate(sim900d_sms_task, "sim900d_sms_task", 4096, &handle, 10, &handle.sms_task_handle) != pdPASS) {
     uart_driver_delete(uart_num);
-    vQueueDelete(handle->internal.sms_queue);
-    free(handle);
+    vQueueDelete(handle.sms_queue);
     return ESP_ERR_NO_MEM;
   }
 
-  *out_handle = handle;
   return ESP_OK;
 }
 
-void sim900d_uart_set_callback(sim900d_uart_handle_t *handle, sms_callback_t cb) {
-  if (handle) {
-    handle->internal.sms_cb = cb;
-  }
-}
+void sim900d_uart_set_callback(sms_callback_t cb) { handle.sms_cb = cb; }
 
 void sim900d_uart_deinit(sim900d_uart_handle_t *handle) {
-  if (!handle)
-    return;
-  if (handle->internal.uart_task_handle)
-    vTaskDelete(handle->internal.uart_task_handle);
-  if (handle->internal.sms_task_handle)
-    vTaskDelete(handle->internal.sms_task_handle);
-  uart_driver_delete(handle->internal.uart_num);
-  if (handle->internal.sms_queue)
-    vQueueDelete(handle->internal.sms_queue);
-  free(handle);
+  if (handle->uart_task_handle)
+    vTaskDelete(handle->uart_task_handle);
+  if (handle->sms_task_handle)
+    vTaskDelete(handle->sms_task_handle);
+  uart_driver_delete(handle->uart_num);
+  if (handle->sms_queue)
+    vQueueDelete(handle->sms_queue);
 }

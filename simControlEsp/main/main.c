@@ -25,8 +25,6 @@
 
 static const char *TAG = "main";
 
-static sim900d_uart_handle_t *sim900d_handle = NULL;
-
 static void sms_received_callback(const sms_message_t *sms) {
   printf("SMS received! Index: %d, From: %s, Text: %s\n", sms->index, sms->sender, sms->text);
 }
@@ -95,15 +93,15 @@ void app_main(void) {
                                                  .parity = UART_PARITY_DISABLE,
                                                  .stop_bits = UART_STOP_BITS_1,
                                                  .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
-  if (sim900d_uart_init(&sim900d_handle, SIM900D_UART_NUM, &sim900d_uart_cfg, SIM900D_UART_TX, SIM900D_UART_RX,
+  if (sim900d_uart_init(SIM900D_UART_NUM, &sim900d_uart_cfg, SIM900D_UART_TX, SIM900D_UART_RX,
                         SIM900D_PWRKEY, SIM900D_STATUS, SIM900D_RI) == ESP_OK) {
-    sim900d_uart_set_callback(sim900d_handle, sms_received_callback);
+    sim900d_uart_set_callback(sms_received_callback);
     ESP_LOGV(TAG, "SIM900D UART initialized");
-    if (sim900d_reset(sim900d_handle, 10000)) {
-      int baud = sim900d_uart_autobaud(sim900d_handle, 1000);
+    if (sim900d_reset(10000)) {
+      int baud = sim900d_uart_autobaud(1000);
       if (baud > 0) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
-        sim900d_network_start(sim900d_handle, 10);
+        sim900d_network_start(10);
       } else {
         ESP_LOGE(TAG, "Failed auto-baud SIM900D");
       }
