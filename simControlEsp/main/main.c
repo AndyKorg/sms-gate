@@ -93,15 +93,24 @@ void app_main(void) {
                                                  .parity = UART_PARITY_DISABLE,
                                                  .stop_bits = UART_STOP_BITS_1,
                                                  .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
-  if (sim900d_uart_init(SIM900D_UART_NUM, &sim900d_uart_cfg, SIM900D_UART_TX, SIM900D_UART_RX,
-                        SIM900D_PWRKEY, SIM900D_STATUS, SIM900D_RI) == ESP_OK) {
-    sim900d_uart_set_callback(sms_received_callback);
+  if (sim900d_uart_init(SIM900D_UART_NUM, &sim900d_uart_cfg, SIM900D_UART_TX, SIM900D_UART_RX, SIM900D_PWRKEY,
+                        SIM900D_STATUS, SIM900D_RI) == ESP_OK) {
     ESP_LOGV(TAG, "SIM900D UART initialized");
-    if (sim900d_reset(10000)) {
+    int reset_attempts = 3;
+    bool reset_success = false;
+    for (int i = 0; i < reset_attempts; ++i) {
+      if (sim900d_reset(10000)) {
+        reset_success = true;
+        break;
+      }
+      ESP_LOGW(TAG, "SIM900D reset attempt %d failed", i + 1);
+    }
+    if (reset_success) {
       int baud = sim900d_uart_autobaud(1000);
       if (baud > 0) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
         sim900d_network_start(10);
+        sim900d_uart_set_callback(sms_received_callback);
       } else {
         ESP_LOGE(TAG, "Failed auto-baud SIM900D");
       }
