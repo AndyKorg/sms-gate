@@ -1,7 +1,8 @@
-// sim900d_parser.c
-#include "sim900d_parser.h"
 #include <string.h>
 #include <stdio.h>
+
+#include "sim900d_command.h"
+#include "sim900d_parser.h"
 
 /**
  * @brief Состояния парсера для обработки однострочных и многострочных ответов.
@@ -55,7 +56,7 @@ void sim900d_register_handler(const char* prefix, Sim900dHandler handler) {
 
 void sim900d_parse_line(const char* line) {
     if (currentState == STATE_ACCUMULATING_MULTILINE) {
-        if (strcmp(line, "OK") == 0 || strcmp(line, "ERROR") == 0) {
+        if (strcmp(line, SIM900D_RESP_OK) == 0 || strcmp(line, SIM900D_RESP_ERROR) == 0) {
             strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody));
             if (currentHandler) {
                 currentHandler(&currentParams);
@@ -108,7 +109,7 @@ void sim900d_parse_line(const char* line) {
                 currentParams.paramCount++;
             }
 
-            if (strcmp(prefix, "+CMGR") == 0 || strcmp(prefix, "+CMGL") == 0) {
+            if (strcmp(prefix, SIM900D_RESP_CMGR) == 0 || strcmp(prefix, SIM900D_RESP_CMGL) == 0) {
                 currentState = STATE_ACCUMULATING_MULTILINE;
                 multilineBuffer[0] = '\0';
                 currentHandler = handlerTable[i];

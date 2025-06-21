@@ -15,7 +15,9 @@
 static const char *TAG = "SIM900";
 
 #include "sim900d_command.h"
+#include "sim900d_parser.h"
 #include "sim900d_uart.h"
+
 
 #define UART_BUF_SIZE 1024
 
@@ -32,20 +34,11 @@ typedef struct {
 
 static sim900d_uart_handle_t handle;
 
+// Период опроса SIM900D (мс)
+#define SIM900D_POLL_PERIOD_MS 2000
+
 // Список поддерживаемых скоростей UART для SIM900D
 static const int baud_list[] = {115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200};
-
-static void sim900d_sms_task(void *pvParameters) {
-  sms_message_t sms;
-
-  while (1) {
-    if (xQueueReceive(handle.sms_queue, &sms, portMAX_DELAY) == pdTRUE) {
-      if (handle.sms_queue) {
-        handle.sms_cb(&sms);
-      }
-    }
-  }
-}
 
 // Отправка AT-команды и ожидание ответа с логированием
 static int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_t timeout) {
@@ -55,7 +48,7 @@ static int sim900d_send_at(const char *cmd, char *response, size_t resp_size, Ti
   uart_write_bytes(handle.uart_num, cmd, strlen(cmd));
   uart_write_bytes(handle.uart_num, "\r\n", 2);
 
-  if (response) {
+  if (response && (resp_size > 1)) {
     int len = uart_read_bytes(handle.uart_num, (uint8_t *)response, resp_size - 1, timeout);
     if (len > 0) {
       response[len] = 0;
@@ -139,7 +132,7 @@ void sim900d_network_start(int attmpt_count) {
     case STATE_CPIN:
       sim900d_send_at(SIM900D_CMD_CPIN, NULL, 0, pdMS_TO_TICKS(500));
       if (sim900d_wait_for_response(SIM900D_RESP_CPIN, resp, sizeof(resp), 2000)) {
-        if (strstr(resp, "READY")) {
+        if (strstr(resp, SIM900D_RESP_READY)) {
           state = STATE_CREG;
         } else {
           ESP_LOGW(TAG, "SIM not ready: %s", resp);
@@ -153,7 +146,7 @@ void sim900d_network_start(int attmpt_count) {
     case STATE_CREG: {
       sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
       if (sim900d_wait_for_response(SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
-        if (sscanf(resp, "+CREG: 0,%d", &creg) == 1) {
+        if (sscanf(resp, SIM900D_RESP_CREG " 0,%d", &creg) == 1) {
           if (creg == 1 || creg == 5) {
             state = STATE_CGREG;
           } else if (creg == 2) {
@@ -166,7 +159,7 @@ void sim900d_network_start(int attmpt_count) {
               waited += 1000;
               sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
               if (sim900d_wait_for_response(SIM900D_RESP_CREG, resp, sizeof(resp), 2000)) {
-                if (sscanf(resp, "+CREG: 0,%d", &creg) == 1 && (creg == 1 || creg == 5)) {
+                if (sscanf(resp, SIM900D_RESP_CREG " 0,%d", &creg) == 1 && (creg == 1 || creg == 5)) {
                   registered = true;
                   break;
                 }
@@ -195,7 +188,7 @@ void sim900d_network_start(int attmpt_count) {
     case STATE_CGREG:
       sim900d_send_at(SIM900D_CMD_CGREG, NULL, 0, pdMS_TO_TICKS(500));
       if (sim900d_wait_for_response(SIM900D_RESP_CGREG, resp, sizeof(resp), 2000)) {
-        if (sscanf(resp, "+CGREG: 0,%d", &cgreg) == 1 && (cgreg == 1 || cgreg == 5)) {
+        if (sscanf(resp, SIM900D_RESP_CGREG " 0,%d", &cgreg) == 1 && (cgreg == 1 || cgreg == 5)) {
           state = STATE_CSQ;
         } else {
           ESP_LOGW(TAG, "CGREG not registered: %s", resp);
@@ -210,7 +203,7 @@ void sim900d_network_start(int attmpt_count) {
     case STATE_CSQ:
       sim900d_send_at(SIM900D_CMD_CSQ, NULL, 0, pdMS_TO_TICKS(500));
       if (sim900d_wait_for_response(SIM900D_RESP_CSQ, resp, sizeof(resp), 2000)) {
-        if (sscanf(resp, "+CSQ: %d", &csq) == 1) {
+        if (sscanf(resp, SIM900D_RESP_CSQ " %d", &csq) == 1) {
           int dBm = -113 + 2 * csq;
           ESP_LOGI(TAG, "Signal strength: %d (%d dBm)", csq, dBm);
           state = STATE_COPS;
@@ -225,7 +218,7 @@ void sim900d_network_start(int attmpt_count) {
     case STATE_COPS:
       sim900d_send_at(SIM900D_CMD_COPS, NULL, 0, pdMS_TO_TICKS(500));
       if (sim900d_wait_for_response(SIM900D_RESP_COPS, resp, sizeof(resp), 2000)) {
-        if (sscanf(resp, "+COPS: 0,0,\"%31[^\"]\"", operator_name) == 1) {
+        if (sscanf(resp, SIM900D_RESP_COPS " 0,0,\"%31[^\"]\"", operator_name) == 1) {
           ESP_LOGI(TAG, "Operator: %s", operator_name);
           state = STATE_DONE;
         } else {
@@ -243,7 +236,7 @@ void sim900d_network_start(int attmpt_count) {
 
     if (state == STATE_ERROR) {
       if (++retry_count < attmpt_count) {
-        ESP_LOGW(TAG, "FSM retry %d/3", retry_count);
+        ESP_LOGW(TAG, "FSM retry %d/%d", retry_count, attmpt_count);
         state = STATE_AT;
         vTaskDelay(pdMS_TO_TICKS(5000));
       } else {
@@ -335,6 +328,20 @@ bool sim900d_reset(uint32_t timeout_ms) {
   }
 }
 
+static void sim900d_sms_task(void *pvParameters) {
+  sms_message_t sms;
+
+  while (1) {
+    if (xQueueReceive(handle.sms_queue, &sms, portMAX_DELAY) == pdTRUE) {
+      if (handle.sms_queue) {
+        handle.sms_cb(&sms);
+      }
+    }
+  }
+}
+
+void sim900d_uart_set_callback(sms_callback_t cb) { handle.sms_cb = cb; }
+
 esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_config, gpio_num_t txd_pin,
                             gpio_num_t rxd_pin, gpio_num_t pwrkey_pin, gpio_num_t status_pin, gpio_num_t ri_pin) {
   if (!uart_config || (txd_pin == GPIO_NUM_NC) || (rxd_pin == GPIO_NUM_NC) || (pwrkey_pin == GPIO_NUM_NC) ||
@@ -392,14 +399,12 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
   return ESP_OK;
 }
 
-void sim900d_uart_set_callback(sms_callback_t cb) { handle.sms_cb = cb; }
-
-void sim900d_uart_deinit(sim900d_uart_handle_t *handle) {
-  if (handle->uart_task_handle)
-    vTaskDelete(handle->uart_task_handle);
-  if (handle->sms_task_handle)
-    vTaskDelete(handle->sms_task_handle);
-  uart_driver_delete(handle->uart_num);
-  if (handle->sms_queue)
-    vQueueDelete(handle->sms_queue);
+void sim900d_uart_deinit() {
+  if (handle.uart_task_handle)
+    vTaskDelete(handle.uart_task_handle);
+  if (handle.sms_task_handle)
+    vTaskDelete(handle.sms_task_handle);
+  uart_driver_delete(handle.uart_num);
+  if (handle.sms_queue)
+    vQueueDelete(handle.sms_queue);
 }

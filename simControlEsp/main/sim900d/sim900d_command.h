@@ -22,6 +22,11 @@
 #define SIM900D_CMD_READ_SMS_FMT "AT+CMGR=%d\r\n"
 
 /**
+ * @brief Форматированная команда для чтения списка SMS (AT+CMGL="%s").
+ */
+#define SIM900D_CMD_LIST_SMS_FMT "AT+CMGL=\"%s\"\r\n"
+
+/**
  * @brief Запрос состояния PIN-кода SIM-карты (AT+CPIN?).
  */
 #define SIM900D_CMD_CPIN "AT+CPIN?\r\n"
@@ -57,6 +62,11 @@
 #define SIM900D_RESP_ERROR "ERROR"
 
 /**
+ * @brief Ответ модуля о готовоности.
+ */
+#define SIM900D_RESP_READY "READY"
+
+/**
  * @brief Префикс уведомления о новом SMS ("+CMTI:").
  */
 #define SIM900D_RESP_CMTI "+CMTI:"
@@ -65,6 +75,11 @@
  * @brief Префикс ответа на команду чтения SMS ("+CMGR:").
  */
 #define SIM900D_RESP_CMGR "+CMGR:"
+
+/**
+ * @brief Префикс ответа на команду для чтения списка SMS (CMGL="%s").
+ */
+#define SIM900D_RESP_CMGL "+CMGL:"
 
 /**
  * @brief Префикс ответа на запрос PIN-кода ("+CPIN:").
