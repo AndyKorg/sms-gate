@@ -92,6 +92,85 @@ void sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
   }
 }
 
+// Обработка однострочных ответов
+static void sim900d_handle_singleline_response(const char *prefix, const char *p, int foundIndex) {
+  char buffer[MAX_PARAM_LEN];
+  int bufIndex = 0;
+  int paramIndex = 0;
+  int inQuote = 0;
+
+  currentParams.paramCount = 0;
+  currentParams.multilineBody[0] = '\0';
+
+  while (*p && *p != '\r' && *p != '\n' && paramIndex < MAX_PARAMS) {
+    if (*p == '"') {
+      inQuote = !inQuote;
+    } else if (*p == ',' && !inQuote) {
+      buffer[bufIndex] = '\0';
+      strncpy(currentParams.params[paramIndex], buffer, MAX_PARAM_LEN);
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
+#endif
+      paramIndex++;
+      bufIndex = 0;
+    } else {
+      if (bufIndex < MAX_PARAM_LEN - 1) {
+        buffer[bufIndex++] = *p;
+      }
+    }
+    p++;
+  }
+  // Добавляем последний параметр, если есть
+  if (bufIndex > 0 && paramIndex < MAX_PARAMS) {
+    buffer[bufIndex] = '\0';
+    strncpy(currentParams.params[paramIndex], buffer, MAX_PARAM_LEN);
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
+#endif
+    paramIndex++;
+  }
+  currentParams.paramCount = paramIndex;
+
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "Invoking handler for prefix: \"%s\"", prefix);
+#endif
+  sim900d_handler_task_msg_t msg = {0};
+  msg.handler = handlerTable[foundIndex];
+  msg.params = currentParams;
+  if (sim900d_handler_queue) {
+    xQueueSend(sim900d_handler_queue, &msg, 0);
+  }
+}
+
+// Функция поиска префикса и возврата индекса и позиции параметров
+static int sim900d_find_prefix(const char *line, const char **paramStart) {
+  for (int i = 0; i < handlerCount; i++) {
+    const char *prefix = handlerPrefixes[i];
+    size_t prefixLen = strlen(prefix);
+
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Checking prefix[%d]: \"%s\"", i, prefix);
+#endif
+
+    const char *search = line;
+    while (search) {
+      const char *pos = strstr(search, prefix);
+      if (!pos)
+        break;
+      if (pos == line || *(pos - 1) == '\n') {
+#ifdef SIM900D_VERBOSE
+        ESP_LOGV(TAG, "Prefix match found: \"%s\" at index %d", prefix, i);
+#endif
+        if (paramStart) *paramStart = pos + prefixLen;
+        return i;
+      }
+      search = pos + 1;
+    }
+  }
+  if (paramStart) *paramStart = NULL;
+  return -1;
+}
+
 void sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
@@ -120,43 +199,14 @@ void sim900d_parse_line(const char *line) {
     return;
   }
 
-  int foundIndex = -1;
   const char *paramStart = NULL;
-  for (int i = 0; i < handlerCount; i++) {
-    const char *prefix = handlerPrefixes[i];
-    size_t prefixLen = strlen(prefix);
-
-#ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Checking prefix[%d]: \"%s\"", i, prefix);
-#endif
-
-    const char *search = line;
-    while (search) {
-      const char *pos = strstr(search, prefix);
-      if (!pos)
-        break;
-      if (pos == line || *(pos - 1) == '\n') {
-#ifdef SIM900D_VERBOSE
-        ESP_LOGV(TAG, "Prefix match found: \"%s\" at index %d", prefix, i);
-#endif
-        foundIndex = i;
-        paramStart = pos + prefixLen;
-        break;
-      }
-      search = pos + 1;
-    }
-    if (foundIndex != -1)
-      break;
-  }
+  int foundIndex = sim900d_find_prefix(line, &paramStart);
 
   if (foundIndex != -1) {
     const char *prefix = handlerPrefixes[foundIndex];
 #ifdef SIM900D_VERBOSE
     ESP_LOGV(TAG, "Handler found for prefix: \"%s\"", prefix);
 #endif
-    currentParams.paramCount = 0;
-    currentParams.multilineBody[0] = '\0';
-
     // Пропускаем разделители после префикса
     const char *p = paramStart;
     while (*p == ':' || *p == ' ' || *p == '\t')
@@ -176,6 +226,9 @@ void sim900d_parse_line(const char *line) {
       int bufIndex = 0;
       int inQuote = 0;
 
+      currentParams.paramCount = 0;
+      currentParams.multilineBody[0] = '\0';
+
       while (*p && currentParams.paramCount < MAX_PARAMS) {
         if (*p == '"') {
           inQuote = !inQuote;
@@ -183,7 +236,7 @@ void sim900d_parse_line(const char *line) {
           buffer[bufIndex] = '\0';
           strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN);
 #ifdef SIM900D_VERBOSE
-          ESP_LOGV(TAG, "w Param[%d]: \"%s\"", currentParams.paramCount, buffer);
+          ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
 #endif
           currentParams.paramCount++;
           bufIndex = 0;
@@ -205,51 +258,9 @@ void sim900d_parse_line(const char *line) {
       }
       return;
     } else {
-    // Для однострочного ответа: разделяем строку на параметры по запятым, учитывая кавычки
-    char buffer[MAX_PARAM_LEN];
-    int bufIndex = 0;
-    int paramIndex = 0;
-    int inQuote = 0;
-
-    while (*p && *p != '\r' && *p != '\n' && paramIndex < MAX_PARAMS) {
-      if (*p == '"') {
-        inQuote = !inQuote;
-      } else if (*p == ',' && !inQuote) {
-        buffer[bufIndex] = '\0';
-        strncpy(currentParams.params[paramIndex], buffer, MAX_PARAM_LEN);
-#ifdef SIM900D_VERBOSE
-        ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
-#endif
-        paramIndex++;
-        bufIndex = 0;
-      } else {
-        if (bufIndex < MAX_PARAM_LEN - 1) {
-        buffer[bufIndex++] = *p;
-        }
-      }
-      p++;
-    }
-    // Добавляем последний параметр, если есть
-    if (bufIndex > 0 && paramIndex < MAX_PARAMS) {
-      buffer[bufIndex] = '\0';
-      strncpy(currentParams.params[paramIndex], buffer, MAX_PARAM_LEN);
-#ifdef SIM900D_VERBOSE
-      ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
-#endif
-      paramIndex++;
-    }
-    currentParams.paramCount = paramIndex;
-
-#ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Invoking handler for prefix: \"%s\"", prefix);
-#endif
-    sim900d_handler_task_msg_t msg = {0};
-    msg.handler = handlerTable[foundIndex];
-    msg.params = currentParams;
-    if (sim900d_handler_queue) {
-      xQueueSend(sim900d_handler_queue, &msg, 0);
-    }
-    return;
+      // Для однострочного ответа вызываем отдельную функцию
+      sim900d_handle_singleline_response(prefix, p, foundIndex);
+      return;
     }
   }
 
