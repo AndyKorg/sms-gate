@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -50,7 +52,7 @@ static void sim900d_handler_task(void *pvParameters) {
   }
 }
 
-void sim900d_parser_init() {
+esp_err_t sim900d_parser_init() {
 #if CONFIG_LOG_DEFAULT_LEVEL > 1
   esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
 #endif
@@ -65,11 +67,29 @@ void sim900d_parser_init() {
 
   if (!sim900d_handler_queue) {
     sim900d_handler_queue = xQueueCreate(SIM900D_HANDLER_QUEUE_LEN, sizeof(sim900d_handler_task_msg_t));
-    xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048, NULL, 8, NULL);
+    if (!sim900d_handler_queue) {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGE(TAG, "Failed to create handler queue");
+#endif
+      return ESP_ERR_NO_MEM;
+    }
+    BaseType_t task_created = xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048, NULL, 8, NULL);
+    if (task_created != pdPASS) {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGE(TAG, "Failed to create handler task");
+#endif
+      vQueueDelete(sim900d_handler_queue);
+      sim900d_handler_queue = NULL;
+      return ESP_ERR_NO_MEM;
+    }
   }
+  return ESP_OK;
 }
 
-void sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
+esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
+  if (!prefix || prefix[0] == '\0') {
+    return ESP_ERR_INVALID_ARG;
+  }
   for (int i = 0; i < handlerCount; i++) {
     if (strcmp(handlerPrefixes[i], prefix) == 0) {
       if (handler == NULL) {
@@ -79,17 +99,20 @@ void sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
           handlerTable[j] = handlerTable[j + 1];
         }
         handlerCount--;
+        return ESP_OK;
       } else {
         handlerTable[i] = handler;
+        return ESP_OK;
       }
-      return;
     }
   }
   if (handler != NULL && handlerCount < MAX_HANDLERS) {
     handlerPrefixes[handlerCount] = prefix;
     handlerTable[handlerCount] = handler;
     handlerCount++;
+    return ESP_OK;
   }
+  return ESP_ERR_NO_MEM;
 }
 
 // Обработка однострочных ответов
@@ -98,14 +121,26 @@ static void sim900d_handle_singleline_response(const char *prefix, const char *p
   int bufIndex = 0;
   int paramIndex = 0;
   int inQuote = 0;
+  int parenLevel = 0;
 
   currentParams.paramCount = 0;
   currentParams.multilineBody[0] = '\0';
 
+  // Сохраняем указатель на начало строки для поиска OK/ERROR в конце
+  const char *lineStart = p;
+
   while (*p && *p != '\r' && *p != '\n' && paramIndex < MAX_PARAMS) {
     if (*p == '"') {
       inQuote = !inQuote;
-    } else if (*p == ',' && !inQuote) {
+    } else if (!inQuote) {
+      if (*p == '(') {
+        parenLevel++;
+      } else if (*p == ')') {
+        if (parenLevel > 0) parenLevel--;
+      }
+    }
+
+    if (*p == ',' && !inQuote && parenLevel == 0) {
       buffer[bufIndex] = '\0';
       strncpy(currentParams.params[paramIndex], buffer, MAX_PARAM_LEN);
 #ifdef SIM900D_VERBOSE
@@ -127,9 +162,25 @@ static void sim900d_handle_singleline_response(const char *prefix, const char *p
 #ifdef SIM900D_VERBOSE
     ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
 #endif
-    paramIndex++;
+  paramIndex++;
   }
   currentParams.paramCount = paramIndex;
+
+  // Проверяем наличие "OK" или "ERROR" в конце строки
+  // Ищем последние непустые символы после параметров
+  while (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t') p++;
+  if (strncmp(p, SIM900D_RESP_ERROR, sizeof(SIM900D_RESP_ERROR) - 1) == 0) {
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Line ends with ERROR");
+#endif
+  currentParams.result = false;
+  }
+  if (strncmp(p, SIM900D_RESP_OK, sizeof(SIM900D_RESP_OK) - 1) == 0) {
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Line ends with OK");
+#endif
+    currentParams.result = true;
+  }
 
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Invoking handler for prefix: \"%s\"", prefix);
@@ -228,6 +279,7 @@ void sim900d_parse_line(const char *line) {
 
       currentParams.paramCount = 0;
       currentParams.multilineBody[0] = '\0';
+      currentParams.result = true;
 
       while (*p && currentParams.paramCount < MAX_PARAMS) {
         if (*p == '"') {
@@ -267,4 +319,62 @@ void sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Unrecognized line: \"%s\"", line);
 #endif
+}
+
+int* sim900d_parse_number_list(const char* str, int* outCount) {
+  int* numbers = NULL;
+  int count = 0;
+  int capacity = 8;
+
+  if (!str || !outCount) return NULL;
+
+  // Пропускаем пробелы и открывающую скобку
+  while (*str && (*str == ' ' || *str == '\t' || *str == '(')) str++;
+
+  numbers = (int*)malloc(capacity * sizeof(int));
+  if (!numbers) return NULL;
+
+  while (*str && *str != ')') {
+    // Пропускаем пробелы
+    while (*str == ' ' || *str == '\t') str++;
+
+    // Читаем первое число
+    char* endptr;
+    int start = (int)strtol(str, &endptr, 10);
+    if (endptr == str) break; // Не число
+
+    str = endptr;
+
+    // Проверяем на диапазон
+    if (*str == '-') {
+      str++;
+      int end = (int)strtol(str, &endptr, 10);
+      if (endptr == str) break; // Не число после '-'
+      str = endptr;
+      if (end >= start) {
+        for (int v = start; v <= end; v++) {
+          if (count >= capacity) {
+            capacity *= 2;
+            numbers = (int*)realloc(numbers, capacity * sizeof(int));
+            if (!numbers) return NULL;
+          }
+          numbers[count++] = v;
+        }
+      }
+    } else {
+      if (count >= capacity) {
+        capacity *= 2;
+        numbers = (int*)realloc(numbers, capacity * sizeof(int));
+        if (!numbers) return NULL;
+      }
+      numbers[count++] = start;
+    }
+
+    // Пропускаем пробелы и запятые
+    while (*str == ' ' || *str == '\t') str++;
+    if (*str == ',') str++;
+  }
+
+  *outCount = count;
+  return numbers;
 }

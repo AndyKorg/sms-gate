@@ -8,6 +8,8 @@
 typedef struct {
     char params[MAX_PARAMS][MAX_PARAM_LEN];
     int paramCount;
+    // false если ответ в конеце не содержит OK, для многострочиных всегда true
+    bool result;
 
     // Дополнительно для многострочного ответа:
     char multilineBody[512]; // SMS тело, может быть multiline
@@ -32,9 +34,12 @@ typedef void (*Sim900dHandler)(Sim900dParsedParams* params);
  *   этой структуры может привести к неопределённому поведению.
  *
  * @param prefix Префикс строки (например, "+CMTI", "+CMGR").
- * @param handler Функция-обработчик, вызываемая при совпадении префикса.
+ * @param handler Функция-обработчик, вызываемая при совпадении префикса. 
+ * Если NULL, то обработчик для prefix удаляется из списка
+ * @return Возвращает ESP_OK при успешном добавлении/обновлении, ESP_OK при удалении, 
+ * ESP_ERR_NO_MEM если нет места, ESP_ERR_INVALID_ARG при ошибке аргументов
  */
-void sim900d_register_handler(const char* prefix, Sim900dHandler handler);
+esp_err_t sim900d_register_handler(const char* prefix, Sim900dHandler handler);
 
 /**
  * @brief Парсинг входящей строки от SIM900D и вызов соответствующего обработчика.
@@ -47,10 +52,21 @@ void sim900d_register_handler(const char* prefix, Sim900dHandler handler);
 void sim900d_parse_line(const char* line);
 
 /**
+ * @brief Разбирает строку вида "(1,2,5-7,10)" и возвращает массив чисел.
+ *        Если встречается диапазон через '-', то добавляет все числа из диапазона.
+ * 
+ * @param str Входная строка (например, "(1,2,5-7,10)")
+ * @param outCount Указатель на переменную, куда будет записано количество чисел
+ * @return int* Указатель на массив чисел (выделяется через malloc, не забудьте освободить)
+ */
+int* sim900d_parse_number_list(const char* str, int* outCount);
+
+/**
  * @brief Инициализация парсера SIM900D.
  *
  * Сбрасывает внутренние структуры, очищает список обработчиков и буфер многострочного ответа.
+ * @return ESP_OK если инициализация спешна, ESP_ERR_NO_MEM в противном случае.
  */
-void sim900d_parser_init();
+esp_err_t sim900d_parser_init();
 
 #endif // SIM900D_PARSER_H
