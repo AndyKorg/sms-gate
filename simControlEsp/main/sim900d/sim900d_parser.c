@@ -1,7 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
-
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sim900d_command.h"
 #include "sim900d_parser.h"
 
@@ -28,6 +29,27 @@ static char multilineBuffer[1024];
 static Sim900dHandler currentHandler = NULL;
 static Sim900dParsedParams currentParams;
 
+// Очередь для передачи задач парсера
+#define SIM900D_HANDLER_QUEUE_LEN 8
+
+typedef struct {
+  Sim900dHandler handler;
+  Sim900dParsedParams params;
+} sim900d_handler_task_msg_t;
+
+static QueueHandle_t sim900d_handler_queue = NULL;
+
+static void sim900d_handler_task(void *pvParameters) {
+  sim900d_handler_task_msg_t msg;
+  while (1) {
+    if (xQueueReceive(sim900d_handler_queue, &msg, portMAX_DELAY) == pdTRUE) {
+      if (msg.handler) {
+        msg.handler(&msg.params);
+      }
+    }
+  }
+}
+
 void sim900d_parser_init() {
 #if CONFIG_LOG_DEFAULT_LEVEL > 1
   esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
@@ -39,6 +61,11 @@ void sim900d_parser_init() {
   multilineBuffer[0] = '\0';
   for (int i = 0; i < MAX_HANDLERS; i++) {
     handlerPrefixes[i] = NULL;
+  }
+
+  if (!sim900d_handler_queue) {
+    sim900d_handler_queue = xQueueCreate(SIM900D_HANDLER_QUEUE_LEN, sizeof(sim900d_handler_task_msg_t));
+    xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048, NULL, 8, NULL);
   }
 }
 
@@ -67,128 +94,166 @@ void sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
 
 void sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
+  ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
 #endif
 
-    if (currentState == STATE_ACCUMULATING_MULTILINE) {
+  if (currentState == STATE_ACCUMULATING_MULTILINE) {
 #ifdef SIM900D_VERBOSE
-        ESP_LOGV(TAG, "Accumulating multiline: \"%s\"", line);
+    ESP_LOGV(TAG, "Accumulating multiline: \"%s\"", line);
 #endif
-        if (strcmp(line, SIM900D_RESP_OK) == 0 || strcmp(line, SIM900D_RESP_ERROR) == 0) {
-            strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody));
+    if (strcmp(line, SIM900D_RESP_OK) == 0 || strcmp(line, SIM900D_RESP_ERROR) == 0) {
+      strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody));
 #ifdef SIM900D_VERBOSE
-            ESP_LOGV(TAG, "Multiline end detected. Handler: %p", (void *)currentHandler);
+      ESP_LOGV(TAG, "Multiline end detected. Handler: %p", (void *)currentHandler);
 #endif
-            if (currentHandler) {
-                currentHandler(&currentParams);
-            }
-            currentState = STATE_IDLE;
-            multilineBuffer[0] = '\0';
-            currentHandler = NULL;
-            return;
-        }
-
-        strncat(multilineBuffer, line, sizeof(multilineBuffer) - strlen(multilineBuffer) - 2);
-        strncat(multilineBuffer, "\n", sizeof(multilineBuffer) - strlen(multilineBuffer) - 2);
-        return;
+      if (currentHandler) {
+        currentHandler(&currentParams);
+      }
+      currentState = STATE_IDLE;
+      multilineBuffer[0] = '\0';
+      currentHandler = NULL;
+      return;
     }
 
-    // Ищем префикс, который может быть в любом месте строки, но всегда предваряется началом строки или символом новой строки
-    int foundIndex = -1;
-    const char *paramStart = NULL;
-    for (int i = 0; i < handlerCount; i++) {
-        const char *prefix = handlerPrefixes[i];
-        size_t prefixLen = strlen(prefix);
+    strncat(multilineBuffer, line, sizeof(multilineBuffer) - strlen(multilineBuffer) - 2);
+    strncat(multilineBuffer, "\n", sizeof(multilineBuffer) - strlen(multilineBuffer) - 2);
+    return;
+  }
+
+  int foundIndex = -1;
+  const char *paramStart = NULL;
+  for (int i = 0; i < handlerCount; i++) {
+    const char *prefix = handlerPrefixes[i];
+    size_t prefixLen = strlen(prefix);
 
 #ifdef SIM900D_VERBOSE
-        ESP_LOGV(TAG, "Checking prefix[%d]: \"%s\"", i, prefix);
+    ESP_LOGV(TAG, "Checking prefix[%d]: \"%s\"", i, prefix);
 #endif
 
-        // Ищем вхождение префикса, предваряемое началом строки или '\n'
-        const char *search = line;
-        while (search) {
-            // Найти вхождение префикса
-            const char *pos = strstr(search, prefix);
-            if (!pos) break;
-            // Проверить, что перед префиксом либо начало строки, либо '\n'
-            if (pos == line || *(pos - 1) == '\n') {
+    const char *search = line;
+    while (search) {
+      const char *pos = strstr(search, prefix);
+      if (!pos)
+        break;
+      if (pos == line || *(pos - 1) == '\n') {
 #ifdef SIM900D_VERBOSE
-                ESP_LOGV(TAG, "Prefix match found: \"%s\" at index %d", prefix, i);
+        ESP_LOGV(TAG, "Prefix match found: \"%s\" at index %d", prefix, i);
 #endif
-                foundIndex = i;
-                paramStart = pos + prefixLen;
-                break;
-            }
-            // Продолжаем поиск после текущего вхождения
-            search = pos + 1;
-        }
-        if (foundIndex != -1) break;
+        foundIndex = i;
+        paramStart = pos + prefixLen;
+        break;
+      }
+      search = pos + 1;
     }
+    if (foundIndex != -1)
+      break;
+  }
 
-    if (foundIndex != -1) {
-        const char *prefix = handlerPrefixes[foundIndex];
+  if (foundIndex != -1) {
+    const char *prefix = handlerPrefixes[foundIndex];
 #ifdef SIM900D_VERBOSE
-        ESP_LOGV(TAG, "Handler found for prefix: \"%s\"", prefix);
+    ESP_LOGV(TAG, "Handler found for prefix: \"%s\"", prefix);
 #endif
-        currentParams.paramCount = 0;
-        currentParams.multilineBody[0] = '\0';
+    currentParams.paramCount = 0;
+    currentParams.multilineBody[0] = '\0';
 
-        // Пропускаем разделители после префикса
-        const char *p = paramStart;
-        while (*p == ':' || *p == ' ' || *p == '\t')
-            p++;
+    // Пропускаем разделители после префикса
+    const char *p = paramStart;
+    while (*p == ':' || *p == ' ' || *p == '\t')
+      p++;
 
-        char buffer[MAX_PARAM_LEN];
-        int bufIndex = 0;
-        int inQuote = 0;
-
-        while (*p && currentParams.paramCount < MAX_PARAMS) {
-            if (*p == '"') {
-                inQuote = !inQuote;
-            } else if (*p == ',' && !inQuote) {
-                buffer[bufIndex] = '\0';
-                strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN);
+    // Если это многострочный ответ, переходим в режим накопления
+    if (strcmp(prefix, SIM900D_RESP_CMGR) == 0 || strcmp(prefix, SIM900D_RESP_CMGL) == 0) {
 #ifdef SIM900D_VERBOSE
-                ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
+      ESP_LOGV(TAG, "Switching to multiline accumulation for prefix: \"%s\"", prefix);
 #endif
-                currentParams.paramCount++;
-                bufIndex = 0;
-            } else {
-                if (bufIndex < MAX_PARAM_LEN - 1) {
-                    buffer[bufIndex++] = *p;
-                }
-            }
-            p++;
-        }
+      currentState = STATE_ACCUMULATING_MULTILINE;
+      multilineBuffer[0] = '\0';
+      currentHandler = handlerTable[foundIndex];
 
-        if (bufIndex > 0 && currentParams.paramCount < MAX_PARAMS) {
-            buffer[bufIndex] = '\0';
-            strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN);
-#ifdef SIM900D_VERBOSE
-            ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
-#endif
-            currentParams.paramCount++;
-        }
+      // Для многострочного ответа парсим параметры как обычно
+      char buffer[MAX_PARAM_LEN];
+      int bufIndex = 0;
+      int inQuote = 0;
 
-        if (strcmp(prefix, SIM900D_RESP_CMGR) == 0 || strcmp(prefix, SIM900D_RESP_CMGL) == 0) {
+      while (*p && currentParams.paramCount < MAX_PARAMS) {
+        if (*p == '"') {
+          inQuote = !inQuote;
+        } else if (*p == ',' && !inQuote) {
+          buffer[bufIndex] = '\0';
+          strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN);
 #ifdef SIM900D_VERBOSE
-            ESP_LOGV(TAG, "Switching to multiline accumulation for prefix: \"%s\"", prefix);
+          ESP_LOGV(TAG, "w Param[%d]: \"%s\"", currentParams.paramCount, buffer);
 #endif
-            currentState = STATE_ACCUMULATING_MULTILINE;
-            multilineBuffer[0] = '\0';
-            currentHandler = handlerTable[foundIndex];
+          currentParams.paramCount++;
+          bufIndex = 0;
         } else {
-#ifdef SIM900D_VERBOSE
-            ESP_LOGV(TAG, "Invoking handler for prefix: \"%s\"", prefix);
-#endif
-            handlerTable[foundIndex](&currentParams);
+          if (bufIndex < MAX_PARAM_LEN - 1) {
+            buffer[bufIndex++] = *p;
+          }
         }
-        return;
+        p++;
+      }
+
+      if (bufIndex > 0 && currentParams.paramCount < MAX_PARAMS) {
+        buffer[bufIndex] = '\0';
+        strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN);
+#ifdef SIM900D_VERBOSE
+        ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
+#endif
+        currentParams.paramCount++;
+      }
+      return;
+    } else {
+    // Для однострочного ответа: разделяем строку на параметры по запятым, учитывая кавычки
+    char buffer[MAX_PARAM_LEN];
+    int bufIndex = 0;
+    int paramIndex = 0;
+    int inQuote = 0;
+
+    while (*p && *p != '\r' && *p != '\n' && paramIndex < MAX_PARAMS) {
+      if (*p == '"') {
+        inQuote = !inQuote;
+      } else if (*p == ',' && !inQuote) {
+        buffer[bufIndex] = '\0';
+        strncpy(currentParams.params[paramIndex], buffer, MAX_PARAM_LEN);
+#ifdef SIM900D_VERBOSE
+        ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
+#endif
+        paramIndex++;
+        bufIndex = 0;
+      } else {
+        if (bufIndex < MAX_PARAM_LEN - 1) {
+        buffer[bufIndex++] = *p;
+        }
+      }
+      p++;
     }
+    // Добавляем последний параметр, если есть
+    if (bufIndex > 0 && paramIndex < MAX_PARAMS) {
+      buffer[bufIndex] = '\0';
+      strncpy(currentParams.params[paramIndex], buffer, MAX_PARAM_LEN);
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
+#endif
+      paramIndex++;
+    }
+    currentParams.paramCount = paramIndex;
 
 #ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Unrecognized line: \"%s\"", line);
+    ESP_LOGV(TAG, "Invoking handler for prefix: \"%s\"", prefix);
 #endif
-    // Неизвестная строка — опционально: логировать
-    // printf("[SIM900D] Unrecognized: %s\n", line);
+    sim900d_handler_task_msg_t msg = {0};
+    msg.handler = handlerTable[foundIndex];
+    msg.params = currentParams;
+    if (sim900d_handler_queue) {
+      xQueueSend(sim900d_handler_queue, &msg, 0);
+    }
+    return;
+    }
+  }
+
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "Unrecognized line: \"%s\"", line);
+#endif
 }
