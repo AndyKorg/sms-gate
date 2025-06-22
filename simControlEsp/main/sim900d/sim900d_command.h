@@ -205,4 +205,9 @@ typedef enum {
  */
 #define SIM900D_RESP_CNMI "+" SIM900D_CNMI ":"
 
+/**
+ * @brief Префикс ответа на команду настройки уведомлений ("AT+CNMI=")
+ */
+#define SIM900D_RESP_SMS_NOTIFY SIM900D_AT "+" SIM900D_CNMI "="
+
 #endif // SIM900D_COMMAND_H
