@@ -1,7 +1,7 @@
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
 #include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -126,9 +126,6 @@ static void sim900d_handle_singleline_response(const char *prefix, const char *p
   currentParams.paramCount = 0;
   currentParams.multilineBody[0] = '\0';
 
-  // Сохраняем указатель на начало строки для поиска OK/ERROR в конце
-  const char *lineStart = p;
-
   while (*p && *p != '\r' && *p != '\n' && paramIndex < MAX_PARAMS) {
     if (*p == '"') {
       inQuote = !inQuote;
@@ -136,7 +133,8 @@ static void sim900d_handle_singleline_response(const char *prefix, const char *p
       if (*p == '(') {
         parenLevel++;
       } else if (*p == ')') {
-        if (parenLevel > 0) parenLevel--;
+        if (parenLevel > 0)
+          parenLevel--;
       }
     }
 
@@ -162,18 +160,19 @@ static void sim900d_handle_singleline_response(const char *prefix, const char *p
 #ifdef SIM900D_VERBOSE
     ESP_LOGV(TAG, "Param[%d]: \"%s\"", paramIndex, buffer);
 #endif
-  paramIndex++;
+    paramIndex++;
   }
   currentParams.paramCount = paramIndex;
 
   // Проверяем наличие "OK" или "ERROR" в конце строки
   // Ищем последние непустые символы после параметров
-  while (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t') p++;
+  while (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t')
+    p++;
   if (strncmp(p, SIM900D_RESP_ERROR, sizeof(SIM900D_RESP_ERROR) - 1) == 0) {
 #ifdef SIM900D_VERBOSE
     ESP_LOGV(TAG, "Line ends with ERROR");
 #endif
-  currentParams.result = false;
+    currentParams.result = false;
   }
   if (strncmp(p, SIM900D_RESP_OK, sizeof(SIM900D_RESP_OK) - 1) == 0) {
 #ifdef SIM900D_VERBOSE
@@ -212,13 +211,15 @@ static int sim900d_find_prefix(const char *line, const char **paramStart) {
 #ifdef SIM900D_VERBOSE
         ESP_LOGV(TAG, "Prefix match found: \"%s\" at index %d", prefix, i);
 #endif
-        if (paramStart) *paramStart = pos + prefixLen;
+        if (paramStart)
+          *paramStart = pos + prefixLen;
         return i;
       }
       search = pos + 1;
     }
   }
-  if (paramStart) *paramStart = NULL;
+  if (paramStart)
+    *paramStart = NULL;
   return -1;
 }
 
@@ -231,7 +232,13 @@ void sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
     ESP_LOGV(TAG, "Accumulating multiline: \"%s\"", line);
 #endif
+    // Проверяем завершение многострочного сообщения
     if (strcmp(line, SIM900D_RESP_OK) == 0 || strcmp(line, SIM900D_RESP_ERROR) == 0) {
+      // Удаляем последний символ новой строки, если есть
+      size_t len = strlen(multilineBuffer);
+      if (len > 0 && multilineBuffer[len - 1] == '\n') {
+        multilineBuffer[len - 1] = '\0';
+      }
       strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody));
 #ifdef SIM900D_VERBOSE
       ESP_LOGV(TAG, "Multiline end detected. Handler: %p", (void *)currentHandler);
@@ -245,6 +252,7 @@ void sim900d_parse_line(const char *line) {
       return;
     }
 
+    // Добавляем строку к буферу сообщения
     strncat(multilineBuffer, line, sizeof(multilineBuffer) - strlen(multilineBuffer) - 2);
     strncat(multilineBuffer, "\n", sizeof(multilineBuffer) - strlen(multilineBuffer) - 2);
     return;
@@ -281,6 +289,7 @@ void sim900d_parse_line(const char *line) {
       currentParams.multilineBody[0] = '\0';
       currentParams.result = true;
 
+      // Парсим параметры до конца строки или до первой новой строки (текст сообщения может быть в этой же строке)
       while (*p && currentParams.paramCount < MAX_PARAMS) {
         if (*p == '"') {
           inQuote = !inQuote;
@@ -292,6 +301,8 @@ void sim900d_parse_line(const char *line) {
 #endif
           currentParams.paramCount++;
           bufIndex = 0;
+        } else if ((*p == '\r' || *p == '\n') && !inQuote) {
+          break; // конец параметров, возможно начинается текст
         } else {
           if (bufIndex < MAX_PARAM_LEN - 1) {
             buffer[bufIndex++] = *p;
@@ -308,6 +319,22 @@ void sim900d_parse_line(const char *line) {
 #endif
         currentParams.paramCount++;
       }
+
+      // Пропускаем разделители после параметров
+      while (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t')
+        p++;
+
+      // Если после параметров есть еще текст (тело сообщения в этой же строке)
+      if (*p) {
+        strncpy(multilineBuffer, p, sizeof(multilineBuffer) - 1);
+        multilineBuffer[sizeof(multilineBuffer) - 1] = '\0';
+        // Сразу ожидаем OK/ERROR на следующей строке
+      } else {
+        multilineBuffer[0] = '\0';
+      }
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "mbuffer \"%s\"", multilineBuffer);
+#endif
       return;
     } else {
       // Для однострочного ответа вызываем отдельную функцию
@@ -321,27 +348,32 @@ void sim900d_parse_line(const char *line) {
 #endif
 }
 
-int* sim900d_parse_number_list(const char* str, int* outCount) {
-  int* numbers = NULL;
+int *sim900d_parse_number_list(const char *str, int *outCount) {
+  int *numbers = NULL;
   int count = 0;
   int capacity = 8;
 
-  if (!str || !outCount) return NULL;
+  if (!str || !outCount)
+    return NULL;
 
   // Пропускаем пробелы и открывающую скобку
-  while (*str && (*str == ' ' || *str == '\t' || *str == '(')) str++;
+  while (*str && (*str == ' ' || *str == '\t' || *str == '('))
+    str++;
 
-  numbers = (int*)malloc(capacity * sizeof(int));
-  if (!numbers) return NULL;
+  numbers = (int *)malloc(capacity * sizeof(int));
+  if (!numbers)
+    return NULL;
 
   while (*str && *str != ')') {
     // Пропускаем пробелы
-    while (*str == ' ' || *str == '\t') str++;
+    while (*str == ' ' || *str == '\t')
+      str++;
 
     // Читаем первое число
-    char* endptr;
+    char *endptr;
     int start = (int)strtol(str, &endptr, 10);
-    if (endptr == str) break; // Не число
+    if (endptr == str)
+      break; // Не число
 
     str = endptr;
 
@@ -349,14 +381,16 @@ int* sim900d_parse_number_list(const char* str, int* outCount) {
     if (*str == '-') {
       str++;
       int end = (int)strtol(str, &endptr, 10);
-      if (endptr == str) break; // Не число после '-'
+      if (endptr == str)
+        break; // Не число после '-'
       str = endptr;
       if (end >= start) {
         for (int v = start; v <= end; v++) {
           if (count >= capacity) {
             capacity *= 2;
-            numbers = (int*)realloc(numbers, capacity * sizeof(int));
-            if (!numbers) return NULL;
+            numbers = (int *)realloc(numbers, capacity * sizeof(int));
+            if (!numbers)
+              return NULL;
           }
           numbers[count++] = v;
         }
@@ -364,15 +398,18 @@ int* sim900d_parse_number_list(const char* str, int* outCount) {
     } else {
       if (count >= capacity) {
         capacity *= 2;
-        numbers = (int*)realloc(numbers, capacity * sizeof(int));
-        if (!numbers) return NULL;
+        numbers = (int *)realloc(numbers, capacity * sizeof(int));
+        if (!numbers)
+          return NULL;
       }
       numbers[count++] = start;
     }
 
     // Пропускаем пробелы и запятые
-    while (*str == ' ' || *str == '\t') str++;
-    if (*str == ',') str++;
+    while (*str == ' ' || *str == '\t')
+      str++;
+    if (*str == ',')
+      str++;
   }
 
   *outCount = count;
