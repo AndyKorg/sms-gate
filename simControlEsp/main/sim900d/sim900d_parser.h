@@ -18,6 +18,18 @@ typedef struct {
 // Обработчик
 typedef void (*Sim900dHandler)(Sim900dParsedParams* params);
 
+typedef enum {
+    /**
+     * @enum parse_state_t
+     * @brief Состояния процесса парсинга.
+     *
+     * - PARSE_STATE_IN_PROGRESS: парсинг еще продолжается.
+     * - PARSE_STATE_DONE: парсинг завершен.
+     */
+    PARSE_STATE_DONE = 0,
+    PARSE_STATE_IN_PROGRESS
+} parse_state_t;
+
 /**
  * @brief Регистрация обработчика для определённого префикса ответа SIM900D.
  * Представляет собой представление строки-префикса.
@@ -49,7 +61,7 @@ esp_err_t sim900d_register_handler(const char* prefix, Sim900dHandler handler);
  *
  * @param line Входная строка для парсинга.
  */
-void sim900d_parse_line(const char* line);
+parse_state_t sim900d_parse_line(const char* line);
 
 /**
  * @brief Разбирает строку вида "(1,2,5-7,10)" и возвращает массив чисел.

@@ -234,7 +234,7 @@ static void trim_whitespace(char *dst, const char *src) {
   dst[len] = '\0';
 }
 
-void sim900d_parse_line(const char *line) {
+parse_state_t sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
 #endif
@@ -271,7 +271,7 @@ void sim900d_parse_line(const char *line) {
       currentState = STATE_IDLE;
       multilineBuffer[0] = '\0';
       currentHandler = NULL;
-      return;
+      return PARSE_STATE_DONE;
     }
 
     // Добавление строки в тело сообщения
@@ -281,7 +281,7 @@ void sim900d_parse_line(const char *line) {
       strcat(multilineBuffer, line);
       strcat(multilineBuffer, "\n");
     }
-    return;
+    return PARSE_STATE_IN_PROGRESS;
   }
 
   const char *paramStart = NULL;
@@ -363,17 +363,18 @@ void sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
       ESP_LOGV(TAG, "Multiline start buffer: \"%s\"", multilineBuffer);
 #endif
-      return;
+      return PARSE_STATE_IN_PROGRESS;
     } else {
       // Обработка однострочного ответа
       sim900d_handle_singleline_response(prefix, p, foundIndex);
-      return;
+      return PARSE_STATE_DONE;
     }
   }
 
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Unrecognized line: \"%s\"", line);
 #endif
+  return PARSE_STATE_DONE;
 }
 
 int *sim900d_parse_number_list(const char *str, int *outCount) {
