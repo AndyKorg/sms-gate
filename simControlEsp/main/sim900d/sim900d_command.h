@@ -16,8 +16,13 @@
 #define SIM900D_ERROR   "ERROR"
 #define SIM900D_READY   "READY"
 #define SIM900D_CMTI    "CMTI"
+#define SIM900D_CPMS    "CPMS"
+#define SIM900D_CMGDA   "CMGDA"   // Литерал команды удаления SMS
 
-// --- Команды ---
+/***********************************************
+            Команды
+***********************************************/
+
 /**
  * @brief Базовая AT-команда для инициализации связи с SIM900D.
  */
@@ -144,7 +149,51 @@ typedef enum {
  */
 #define SIM900D_RESP_CNMI_TEST  SIM900D_AT "+" SIM900D_CNMI "=?\r\n"
 
-// --- Ответы и префиксы ---
+/**
+ * @brief Запрос состояния памяти SMS (AT+CPMS?).
+ */
+#define SIM900D_CMD_CPMS SIM900D_AT "+" SIM900D_CPMS "?\r\n"
+
+/**
+ * @brief Команда для удаления всех SMS из памяти (AT+CMGDA="DEL ALL").
+ * @details Удаляет все SMS-сообщения из памяти модуля.
+ */
+#define SIM900D_CMD_DELETE_ALL_SMS    SIM900D_AT "+" SIM900D_CMGDA "=\"DEL ALL\"\r\n"
+
+/**
+ * @brief Команда для удаления всех прочитанных SMS (AT+CMGDA="DEL READ").
+ * @details Удаляет только прочитанные сообщения.
+ */
+#define SIM900D_CMD_DELETE_READ_SMS   SIM900D_AT "+" SIM900D_CMGDA "=\"DEL READ\"\r\n"
+
+/**
+ * @brief Команда для удаления всех непрочитанных SMS (AT+CMGDA="DEL UNREAD").
+ * @details Удаляет только непрочитанные сообщения.
+ */
+#define SIM900D_CMD_DELETE_UNREAD_SMS SIM900D_AT "+" SIM900D_CMGDA "=\"DEL UNREAD\"\r\n"
+
+/**
+ * @brief Команда для удаления всех отправленных SMS (AT+CMGDA="DEL SENT").
+ * @details Удаляет только отправленные сообщения.
+ */
+#define SIM900D_CMD_DELETE_SENT_SMS   SIM900D_AT "+" SIM900D_CMGDA "=\"DEL SENT\"\r\n"
+
+/**
+ * @brief Команда для удаления всех неотправленных SMS (AT+CMGDA="DEL UNSENT").
+ * @details Удаляет только неотправленные сообщения.
+ */
+#define SIM900D_CMD_DELETE_UNSENT_SMS SIM900D_AT "+" SIM900D_CMGDA "=\"DEL UNSENT\"\r\n"
+
+/**
+ * @brief Команда для удаления всех входящих SMS (AT+CMGDA="DEL INBOX").
+ * @details Удаляет только входящие сообщения.
+ */
+#define SIM900D_CMD_DELETE_INBOX_SMS  SIM900D_AT "+" SIM900D_CMGDA "=\"DEL INBOX\"\r\n"
+
+/***********************************************
+            Ответы и префиксы
+***********************************************/
+
 /**
  * @brief Ответ модуля об успешном выполнении команды ("OK").
  */
@@ -209,5 +258,10 @@ typedef enum {
  * @brief Префикс ответа на команду настройки уведомлений ("AT+CNMI=")
  */
 #define SIM900D_RESP_SMS_NOTIFY SIM900D_AT "+" SIM900D_CNMI "="
+
+/**
+ * @brief Префикс ответа на запрос состояния памяти SMS ("+CPMS:").
+ */
+#define SIM900D_RESP_CPMS "+" SIM900D_CPMS ":"
 
 #endif // SIM900D_COMMAND_H

@@ -29,6 +29,13 @@ static void sms_received_callback(const sms_message_t *sms) {
   printf("SMS received! Index: %d, From: %s, Text: %s\n", sms->index, sms->sender, sms->text);
 }
 
+static void network_status_callback(bool registered){
+    ESP_LOGV(TAG, "network status %d", registered);
+  if (registered){
+    sim900d_network_monitor_start(60*1000);
+  }
+}
+
 /// @brief Проверка причины перезагрузки
 static void reboot_reason_check() {
   esp_err_t err = nvs_flash_init();
@@ -109,8 +116,9 @@ void app_main(void) {
       int baud = sim900d_uart_autobaud(1000);
       if (baud > 0) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
-        sim900d_network_start(10);
-        sim900d_uart_set_callback(sms_received_callback);
+        sim900d_sms_set_callback(sms_received_callback);
+        sim900d_network_status_set_callback(network_status_callback);
+        sim900d_service_start();
       } else {
         ESP_LOGE(TAG, "Failed auto-baud SIM900D");
       }

@@ -61,6 +61,12 @@ typedef void (*network_status_callback_t)(bool registered);
 void sim900d_network_status_set_callback(network_status_callback_t cb);
 
 /**
+ * @brief Запустить задачу мониторинга сети.
+ * @param period_ms Период опроса в миллисекундах.
+ */
+void sim900d_network_monitor_start(uint32_t period_ms);
+
+/**
  * @brief Запускает сервис.
  * Запускает последовательные шаги инициализации GSM-модуля SIM900D:
  * 1. Проверка готовности SIM-карты (CPIN).

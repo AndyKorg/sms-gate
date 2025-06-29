@@ -11,7 +11,7 @@
 #define SIM900D_VERBOSE
 #ifdef SIM900D_VERBOSE
 #undef LOG_LOCAL_LEVEL
-#define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
+#define LOG_LOCAL_LEVEL ESP_LOG_ERROR
 #include "esp_log.h"
 #endif
 

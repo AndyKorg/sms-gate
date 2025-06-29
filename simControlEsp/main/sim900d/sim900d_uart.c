@@ -38,6 +38,7 @@ static sim900d_uart_handle_t handle;
 
 // Список поддерживаемых скоростей UART для SIM900D
 static const int baud_list[] = {115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200};
+#define SIM900D_UART_TX_WAIT_MS 1000
 
 // Группа событий для управления
 static EventGroupHandle_t sim900d_uart_event_group = NULL;
@@ -45,12 +46,15 @@ static EventGroupHandle_t sim900d_uart_event_group = NULL;
 #define SIM900D_UART_EVENT_READ_ENABLE (1 << 0)
 // Флаг успешной регистрации в сети
 #define SIM900D_UART_EVENT_NET_REGISTERED (1 << 1)
+// Флаг, указывающий, что драйвер занят обработкой ответа
+#define SIM900D_UART_EVENT_BUSY (1 << 2)
 
 // Отправка AT-команды и ожидание ответа с логированием
 static int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_t timeout) {
   // Логируем отправляемую команду
   ESP_LOGV(TAG, "UART->SIM900D: %s", cmd);
-
+  // Драйвер занят
+  xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
   uart_write_bytes(handle.uart_num, cmd, strlen(cmd));
   uart_write_bytes(handle.uart_num, "\r\n", 2);
 
@@ -81,6 +85,30 @@ static bool sim900d_int_array_contains(const int *arr, size_t len, int value) {
 /****************************
  * HANDLERS
  **************************** */
+/**
+ * @brief Обработчик параметров состояния памяти SMS (+CPMS).
+ * Если память заполнена, очищает её.
+ */
+static void sim900d_cpms_handler(Sim900dParsedParams *params) {
+  if (!params || params->paramCount < 6) {
+    ESP_LOGE(TAG, SIM900D_RESP_CPMS " invalid params");
+    return;
+  }
+  // params: <mem1>,<used1>,<total1>,<mem2>,<used2>,<total2>
+  int used1 = atoi(params->params[1]);
+  int total1 = atoi(params->params[2]);
+  int used2 = atoi(params->params[4]);
+  int total2 = atoi(params->params[5]);
+  ESP_LOGI(TAG, "CPMS: mem1=%s used1=%d total1=%d, mem2=%s used2=%d total2=%d",
+           params->params[0], used1, total1, params->params[3], used2, total2);
+
+  bool mem_full = (used1 >= total1) || (used2 >= total2);
+  if (mem_full) {
+    ESP_LOGW(TAG, "SMS memory full, deleting all messages...");
+    sim900d_send_at(SIM900D_CMD_DELETE_ALL_SMS, NULL, 0, pdMS_TO_TICKS(SIM900D_UART_TX_WAIT_MS));
+  }
+}
+
 /**
  * @brief Обработчик параметров чтения SMS-сообщения (CMGR).
  */
@@ -117,7 +145,7 @@ static void sim900d_cmti_handler(Sim900dParsedParams *params) {
   ESP_LOGI(TAG, "New SMS indication: mem=%s, index=%d", mem, index);
   char cmd[32];
   snprintf(cmd, sizeof(cmd), SIM900D_CMD_READ_SMS_FMT, index);
-  sim900d_send_at(cmd, NULL, 0, pdMS_TO_TICKS(1000));
+  sim900d_send_at(cmd, NULL, 0, pdMS_TO_TICKS(SIM900D_UART_TX_WAIT_MS));
 }
 
 /**
@@ -127,9 +155,11 @@ static void sim900d_cnmi_handler(Sim900dParsedParams *params) {
   if (!params->result) {
     ESP_LOGE(TAG, "CNMI fault!");
     sim900d_register_handler(SIM900D_RESP_CMTI, NULL);
+    // TODO: Добавить тут создание задачи периодической проверки смс
   } else {
     sim900d_register_handler(SIM900D_RESP_CMTI, sim900d_cmti_handler);
   }
+  sim900d_send_at(SIM900D_CMD_CPMS, NULL, 0, pdMS_TO_TICKS(SIM900D_UART_TX_WAIT_MS));
 }
 
 /**
@@ -277,7 +307,7 @@ static void sim900d_register_hndlers() {
   ok &= sim900d_register_handler(SIM900D_RESP_CREG, sim900d_creg_handler) == ESP_OK;
   ok &= sim900d_register_handler(SIM900D_RESP_CNMI, sim900d_cnmi_test_handler) == ESP_OK;
   ok &= sim900d_register_handler(SIM900D_RESP_SMS_NOTIFY, sim900d_cnmi_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_CMGR, sim900d_cmgr_handler) == ESP_OK;
+  ok &= sim900d_register_handler(SIM900D_RESP_CPMS, sim900d_cpms_handler) == ESP_OK;
   if (!ok) {
     ESP_LOGE(TAG, "Failed to register SIM900D response handlers");
   }
@@ -302,7 +332,13 @@ static void sim900d_uart_read_task(void *pvParameters) {
       int len = uart_read_bytes(handle.uart_num, buf, UART_BUF_SIZE, pdMS_TO_TICKS(100));
       if (len > 0) {
         buf[len] = 0;
-        sim900d_parse_line((char *)buf);
+        ESP_LOGV(TAG, "SIM900D->UART:%s", buf);
+        if (sim900d_parse_line((char *)buf) == PARSE_STATE_IN_PROGRESS) {
+          xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+        } else {
+          xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+        }
+        ESP_LOGV(TAG, "Busy:%d", xEventGroupGetBits(sim900d_uart_event_group) & SIM900D_UART_EVENT_BUSY ? 1 : 0);
       }
       vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -317,9 +353,10 @@ int sim900d_uart_autobaud(uint32_t timeout_ms) {
   size_t baud_count = sizeof(baud_list) / sizeof(baud_list[0]);
   uart_port_t uart_num = handle.uart_num;
 
-  // Снимаем бит разрешения чтения UART (запретить чтение)
+  // Снимаем бит разрешения чтения UART (запретить чтение) и драйвер занят
   if (sim900d_uart_event_group) {
     xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
+    xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
   }
 
   int result = -1;
@@ -337,9 +374,10 @@ int sim900d_uart_autobaud(uint32_t timeout_ms) {
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 
-  // Устанавливаем бит разрешения чтения UART (разрешить чтение)
+  // Устанавливаем бит разрешения чтения UART (разрешить чтение) и дравйер свободен
   if (sim900d_uart_event_group) {
     xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
+    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
   }
 
   if (result < 0) {
@@ -484,8 +522,10 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
   }
   // Разрешаем чтение по умолчанию
   xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
-  // Регистрации в сети нет
+  // Нет регистрации в сети
   xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+  // Драйвер свободен
+  xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
 
   if (xTaskCreate(sim900d_uart_read_task, "sim900d_uart_read_task", 1024 * 6, &handle, 10, &handle.uart_task_handle) !=
       pdPASS) {
@@ -504,6 +544,10 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
 static void sim900d_network_monitor_task(void *pvParameters) {
   uint32_t period_ms = *((uint32_t *)pvParameters);
   while (1) {
+    // Ждём, пока дравер занят основным потоком
+    while (xEventGroupGetBits(sim900d_uart_event_group) & SIM900D_UART_EVENT_BUSY) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
     sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
     vTaskDelay(pdMS_TO_TICKS(period_ms));
   }
