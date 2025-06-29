@@ -8,25 +8,47 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "sim900d/sim900d_command.h"
+#include "sim900d/sim900d_parser.h"
+
+
 #define UART_NUM UART_NUM_0
 #define UART_RX_BUF_SIZE 1024
 
 static const char *TAG = "console";
 
-/* Example command handler */
-static int cmd_hello(int argc, char **argv) {
-  printf("Hello, ESP-ADF Console!\n");
+static void sim900d_handler(Sim900dParsedParams *params) {
+  if (!params || params->paramCount < 5) {
+    ESP_LOGE(TAG, SIM900D_RESP_CMGR " invalid params");
+    return;
+  }
+  for (int i = 0; i < params->paramCount; ++i) {
+    ESP_LOGV(TAG, "param[%d]: %s", i, params->params[i]);
+  }
+  ESP_LOGV(TAG, "sms text %s", params->multilineBody);
+}
+
+static int cmd_parse(int argc, char **argv) {
+  if (argc < 3) {
+    printf("Usage: parse <string1> <string2>\n");
+    return 1;
+  }
+  printf("Parsed strings: %s, %s\n", argv[1], argv[2]);
+  char *prefix = argv[1];
+  char *lime = argv[2];
+  sim900d_register_handler(prefix, sim900d_handler);
+  sim900d_parse_line(lime);
   return 0;
 }
 
 static void register_console_commands(void) {
-  const esp_console_cmd_t hello_cmd = {
-      .command = "hello",
-      .help = "Print hello message",
-      .hint = NULL,
-      .func = &cmd_hello,
+  const esp_console_cmd_t parse_cmd = {
+      .command = "parse",
+      .help = "Parse two parameters - answer & string line",
+      .hint = "<string1> <string2>",
+      .func = &cmd_parse,
   };
-  ESP_ERROR_CHECK(esp_console_cmd_register(&hello_cmd));
+  ESP_ERROR_CHECK(esp_console_cmd_register(&parse_cmd));
 }
 
 /*----------------------------*
