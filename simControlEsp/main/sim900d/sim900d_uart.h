@@ -18,6 +18,8 @@ typedef struct {
   int index;
   char sender[32];
   char text[161];
+  char status[32];
+  char timestamp[32];
 } sms_message_t;
 
 /**
@@ -37,18 +39,35 @@ typedef void (*sms_callback_t)(const sms_message_t *sms);
  *
  * @param cb     Функция обратного вызова для обработки событий SMS.
  */
-void sim900d_uart_set_callback(sms_callback_t cb);
-
-
-void sim900d_network_start(int attmpt_count);
+void sim900d_sms_set_callback(sms_callback_t cb);
 
 /**
- * @brief Проверяет работоспособность SIM900D отправкой команды AT.
+ * @brief Тип функции обратного вызова для обработки изменения статуса регистрации в сети.
  *
- * @param timeout_ms Таймаут ожидания ответа, мс.
- * @return true если модуль отвечает "OK", false — если нет ответа или ошибка.
+ * Этот тип определяет функцию, которая вызывается при изменении статуса регистрации SIM900D в сети.
+ *
+ * @param registered true, если модуль зарегистрирован в сети; false, если сеть потеряна.
  */
-bool sim900d_check_alive(uint32_t timeout_ms);
+typedef void (*network_status_callback_t)(bool registered);
+
+/**
+ * @brief Устанавливает функцию обратного вызова для изменения статуса регистрации в сети.
+ *
+ * Эта функция назначает пользовательскую функцию обратного вызова, которая будет вызываться
+ * при изменении статуса регистрации SIM900D в сети (например, при подключении или потере сети).
+ *
+ * @param cb     Функция обратного вызова для обработки изменения статуса регистрации.
+ */
+void sim900d_network_status_set_callback(network_status_callback_t cb);
+
+/**
+ * @brief Запускает сервис.
+ * Запускает последовательные шаги инициализации GSM-модуля SIM900D:
+ * 1. Проверка готовности SIM-карты (CPIN).
+ * 2. Проверка регистрации в сети (CREG), пока бесконечное ожидание.
+ * и т.д.
+ */
+void sim900d_service_start();
 
 /**
  * @brief Жесткий сброс модуля SIM900D с помощью пина PWRKEY и чтение состояния пина STATUS.
@@ -86,8 +105,7 @@ void sim900d_uart_deinit();
  *      - ESP_OK при успехе
  *      - Соответствующий код ошибки esp_err_t в случае неудачи
  */
-esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_config,
-                            gpio_num_t txd_pin, gpio_num_t rxd_pin, gpio_num_t pwrkey_pin, gpio_num_t status_pin,
-                            gpio_num_t ri_pin);
+esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_config, gpio_num_t txd_pin,
+                            gpio_num_t rxd_pin, gpio_num_t pwrkey_pin, gpio_num_t status_pin, gpio_num_t ri_pin);
 
 #endif // SIM900D_UART_H
