@@ -24,7 +24,7 @@ static const char *TAG = "SIM900";
 typedef struct {
   uart_port_t uart_num;
   QueueHandle_t sms_queue;
-  QueueHandle_t lowprio_cmd_queue; // Очердь низкоприоритетных команд
+  QueueHandle_t lowprio_cmd_queue; // Очередь низкоприоритетных команд
   sms_callback_t sms_cb;
   network_status_callback_t network_status_cb;
   TaskHandle_t uart_task_handle;
@@ -34,6 +34,7 @@ typedef struct {
   gpio_num_t pwrkey_gpio;
   gpio_num_t status_gpio;
   gpio_num_t ri_gpio; // Может быть неопределен
+  EventGroupHandle_t uart_event_group; // <-- перенесено сюда
 } sim900d_uart_handle_t;
 
 static sim900d_uart_handle_t handle = {.uart_num = UART_NUM_MAX};
@@ -42,8 +43,6 @@ static sim900d_uart_handle_t handle = {.uart_num = UART_NUM_MAX};
 static const int baud_list[] = {115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200};
 #define SIM900D_UART_TX_WAIT_MS 1000
 
-// Группа событий для управления
-static EventGroupHandle_t sim900d_uart_event_group = NULL;
 // Разрешение чтения из uart
 #define SIM900D_UART_EVENT_READ_ENABLE (1 << 0)
 // Флаг успешной регистрации в сети
@@ -67,7 +66,7 @@ static int sim900d_send_at(const char *cmd, char *response, size_t resp_size, Ti
   // Логируем отправляемую команду
   ESP_LOGV(TAG, "UART->SIM900D: %s", cmd);
   // Драйвер занят
-  xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+  xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
   uart_write_bytes(handle.uart_num, cmd, strlen(cmd));
   uart_write_bytes(handle.uart_num, "\r\n", 2);
 
@@ -274,38 +273,38 @@ static void sim900d_creg_handler(Sim900dParsedParams *params) {
   switch (stat) {
   case 0:
     ESP_LOGW(TAG, "Not registered, not searching for operator");
-    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
     break;
   case 1:
     ESP_LOGI(TAG, "Registered, home network");
-    xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
     sim900d_send_at(SIM900D_RESP_CNMI_TEST, NULL, 0, pdMS_TO_TICKS(500));
     break;
   case 2:
     ESP_LOGI(TAG, "Not registered, searching for operator");
-    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
     // Продолжаем ожидание регистрации
     vTaskDelay(pdMS_TO_TICKS(1000));
     sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
     break;
   case 3:
     ESP_LOGW(TAG, "Registration denied");
-    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
     break;
   case 4:
     ESP_LOGW(TAG, "Unknown registration status");
-    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
     break;
   case 5:
     ESP_LOGI(TAG, "Registered, roaming");
-    xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
     break;
   default:
     ESP_LOGW(TAG, "Unknown stat value: %d", stat);
-    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
     break;
   }
-  bool net_registered = (xEventGroupGetBits(sim900d_uart_event_group) & SIM900D_UART_EVENT_NET_REGISTERED) != 0;
+  bool net_registered = (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_NET_REGISTERED) != 0;
   if (net_registered != network_state) {
     network_state = net_registered;
     if (handle.network_status_cb) {
@@ -341,18 +340,18 @@ static void sim900d_uart_read_task(void *pvParameters) {
   while (1) {
     ESP_LOGV(TAG, "Bloced?");
     // Ждём, пока установлен бит разрешения чтения
-    xEventGroupWaitBits(sim900d_uart_event_group, SIM900D_UART_EVENT_READ_ENABLE, pdFALSE, pdTRUE, portMAX_DELAY);
-    while (xEventGroupGetBits(sim900d_uart_event_group) & SIM900D_UART_EVENT_READ_ENABLE) {
+    xEventGroupWaitBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE, pdFALSE, pdTRUE, portMAX_DELAY);
+    while (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_READ_ENABLE) {
       int len = uart_read_bytes(handle.uart_num, buf, UART_BUF_SIZE, pdMS_TO_TICKS(100));
       if (len > 0) {
         buf[len] = 0;
         ESP_LOGV(TAG, "SIM900D->UART:%s", buf);
         if (sim900d_parse_line((char *)buf) == PARSE_STATE_IN_PROGRESS) {
-          xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+          xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
         } else {
-          xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+          xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
         }
-        ESP_LOGV(TAG, "Busy:%d", xEventGroupGetBits(sim900d_uart_event_group) & SIM900D_UART_EVENT_BUSY ? 1 : 0);
+        ESP_LOGV(TAG, "Busy:%d", xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_BUSY ? 1 : 0);
       }
       vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -368,9 +367,9 @@ int sim900d_uart_autobaud(uint32_t timeout_ms) {
   uart_port_t uart_num = handle.uart_num;
 
   // Снимаем бит разрешения чтения UART (запретить чтение) и драйвер занят
-  if (sim900d_uart_event_group) {
-    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
-    xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+  if (handle.uart_event_group) {
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
+    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
   }
 
   int result = -1;
@@ -389,9 +388,9 @@ int sim900d_uart_autobaud(uint32_t timeout_ms) {
   }
 
   // Устанавливаем бит разрешения чтения UART (разрешить чтение) и дравйер свободен
-  if (sim900d_uart_event_group) {
-    xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
-    xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+  if (handle.uart_event_group) {
+    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
   }
 
   if (result < 0) {
@@ -479,7 +478,7 @@ static void sim900d_lowprio_cmd_task(void *pvParameters) {
   while (1) {
     if (xQueueReceive(handle.lowprio_cmd_queue, &cmd_msg, portMAX_DELAY) == pdTRUE) {
       // Ждём, пока драйвер не занят
-      while (xEventGroupGetBits(sim900d_uart_event_group) & SIM900D_UART_EVENT_BUSY) {
+      while (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_BUSY) {
         vTaskDelay(pdMS_TO_TICKS(10));
       }
       sim900d_send_at(cmd_msg.cmd, NULL, 0, cmd_msg.timeout);
@@ -558,9 +557,9 @@ static void sim900d_uart_cleanup(uart_port_t uart_num) {
     vQueueDelete(handle.lowprio_cmd_queue);
     handle.lowprio_cmd_queue = NULL;
   }
-  if (sim900d_uart_event_group) {
-    vEventGroupDelete(sim900d_uart_event_group);
-    sim900d_uart_event_group = NULL;
+  if (handle.uart_event_group) {
+    vEventGroupDelete(handle.uart_event_group);
+    handle.uart_event_group = NULL;
   }
   if (handle.uart_task_handle)
     vTaskDelete(handle.uart_task_handle);
@@ -631,17 +630,17 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
   sim900d_register_hndlers();
 
   // Создаём группу событий для управления
-  sim900d_uart_event_group = xEventGroupCreate();
-  if (!sim900d_uart_event_group) {
+  handle.uart_event_group = xEventGroupCreate();
+  if (!handle.uart_event_group) {
     sim900d_uart_cleanup(uart_num);
     return ESP_ERR_NO_MEM;
   }
   // Разрешаем чтение по умолчанию
-  xEventGroupSetBits(sim900d_uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
+  xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
   // Нет регистрации в сети
-  xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
+  xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
   // Драйвер свободен
-  xEventGroupClearBits(sim900d_uart_event_group, SIM900D_UART_EVENT_BUSY);
+  xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
 
   if (xTaskCreate(sim900d_uart_read_task, "sim900d_uart_read_task", 1024 * 6, &handle, 10, &handle.uart_task_handle) !=
       pdPASS) {
