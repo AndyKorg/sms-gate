@@ -5,7 +5,7 @@
 #define SIM900D_AT      "AT"
 #define SIM900D_CMGF    "CMGF"
 #define SIM900D_CNMI    "CNMI"
-#define SIM900D_CMGR    "CMGR"
+#define SIM900D_CMGR    "CMGR"    //чтения SMS-сообщения из памяти SIM900D
 #define SIM900D_CMGL    "CMGL"
 #define SIM900D_CPIN    "CPIN"
 #define SIM900D_CREG    "CREG"
@@ -17,7 +17,8 @@
 #define SIM900D_READY   "READY"
 #define SIM900D_CMTI    "CMTI"
 #define SIM900D_CPMS    "CPMS"
-#define SIM900D_CMGDA   "CMGDA"   // Литерал команды удаления SMS
+#define SIM900D_CMGDA   "CMGDA"   // удаления всех SMS
+#define SIM900D_CMGD    "CMGD"    // удаления SMS по индексу
 
 /***********************************************
             Команды
@@ -189,6 +190,11 @@ typedef enum {
  * @details Удаляет только входящие сообщения.
  */
 #define SIM900D_CMD_DELETE_INBOX_SMS  SIM900D_AT "+" SIM900D_CMGDA "=\"DEL INBOX\"\r\n"
+/**
+ * @brief Форматированная команда для удаления SMS по индексу (AT+CMGD=%d).
+ * @details Удаляет SMS-сообщение с указанным индексом из памяти модуля.
+ */
+#define SIM900D_CMD_DELETE_SMS_BY_INDEX_FMT SIM900D_AT "+"  SIM900D_CMGD "=%d\r\n"
 
 /***********************************************
             Ответы и префиксы
