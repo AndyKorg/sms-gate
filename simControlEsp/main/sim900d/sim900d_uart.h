@@ -28,8 +28,10 @@ typedef struct {
  * Этот тип определяет функцию, которая вызывается при получении нового SMS-сообщения.
  *
  * @param sms Указатель на структуру sms_message_t, содержащую данные полученного SMS-сообщения.
+ * @return esp_err_t Код ошибки, возвращаемый функцией обратного вызова. 
+ * ESP_OK при успешной обработке, либо соответствующий код ошибки в случае неудачи.
  */
-typedef void (*sms_callback_t)(const sms_message_t *sms);
+typedef esp_err_t (*sms_callback_t)(const sms_message_t *sms);
 
 /**
  * @brief Устанавливает функцию обратного вызова для событий SMS на SIM900D UART.

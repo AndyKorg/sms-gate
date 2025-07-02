@@ -25,8 +25,9 @@
 
 static const char *TAG = "main";
 
-static void sms_received_callback(const sms_message_t *sms) {
+static esp_err_t sms_received_callback(const sms_message_t *sms) {
   printf("SMS received! Index: %d, From: %s, Text: %s\n", sms->index, sms->sender, sms->text);
+  return ESP_OK;
 }
 
 static void network_status_callback(bool registered){
