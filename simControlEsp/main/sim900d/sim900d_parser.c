@@ -73,7 +73,7 @@ esp_err_t sim900d_parser_init() {
 #endif
       return ESP_ERR_NO_MEM;
     }
-    BaseType_t task_created = xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048, NULL, 8, NULL);
+    BaseType_t task_created = xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048*2, NULL, 8, NULL);
     if (task_created != pdPASS) {
 #ifdef SIM900D_VERBOSE
       ESP_LOGE(TAG, "Failed to create handler task");
