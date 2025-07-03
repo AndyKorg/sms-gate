@@ -234,54 +234,117 @@ static void trim_whitespace(char *dst, const char *src) {
   dst[len] = '\0';
 }
 
+static parse_state_t sim900d_handle_multiline_response_start(const char *prefix, const char *p, int foundIndex) {
+  currentState = STATE_ACCUMULATING_MULTILINE;
+  multilineBuffer[0] = '\0';
+  currentHandler = handlerTable[foundIndex];
+
+  char buffer[MAX_PARAM_LEN];
+  int bufIndex = 0;
+  int inQuote = 0;
+
+  currentParams.paramCount = 0;
+  currentParams.multilineBody[0] = '\0';
+  currentParams.result = true;
+
+  // Парсим параметры
+  while (*p && currentParams.paramCount < MAX_PARAMS) {
+    if (*p == '"') {
+      inQuote = !inQuote;
+    } else if (*p == ',' && !inQuote) {
+      buffer[bufIndex] = '\0';
+      strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN - 1);
+      currentParams.params[currentParams.paramCount][MAX_PARAM_LEN - 1] = '\0';
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
+#endif
+      currentParams.paramCount++;
+      bufIndex = 0;
+    } else if ((*p == '\r' || *p == '\n') && !inQuote) {
+      break;
+    } else {
+      if (bufIndex < MAX_PARAM_LEN - 1) {
+        buffer[bufIndex++] = *p;
+      }
+    }
+    p++;
+  }
+
+  if (bufIndex > 0 && currentParams.paramCount < MAX_PARAMS) {
+    buffer[bufIndex] = '\0';
+    strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN - 1);
+    currentParams.params[currentParams.paramCount][MAX_PARAM_LEN - 1] = '\0';
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
+#endif
+    currentParams.paramCount++;
+  }
+
+  while (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t')
+    p++;
+
+  if (*p) {
+    strncpy(multilineBuffer, p, sizeof(multilineBuffer) - 1);
+    multilineBuffer[sizeof(multilineBuffer) - 1] = '\0';
+  } else {
+    multilineBuffer[0] = '\0';
+  }
+
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "Multiline start buffer: \"%s\"", multilineBuffer);
+#endif
+
+  return PARSE_STATE_IN_PROGRESS;
+}
+
+static parse_state_t sim900d_handle_multiline_response_continue(const char *line) {
+  char cleaned[64];
+  trim_whitespace(cleaned, line);
+
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "Multiline continuation, cleaned: \"%s\"", cleaned);
+#endif
+
+  if (strcmp(cleaned, SIM900D_RESP_OK) == 0 || strcmp(cleaned, SIM900D_RESP_ERROR) == 0) {
+    size_t len = strlen(multilineBuffer);
+    while (len > 0 && (multilineBuffer[len - 1] == '\n' || multilineBuffer[len - 1] == '\r')) {
+      multilineBuffer[--len] = '\0';
+    }
+
+    strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody) - 1);
+    currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
+
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Multiline end detected. Handler: %p", (void *)currentHandler);
+#endif
+    if (currentHandler) {
+      currentHandler(&currentParams);
+    }
+
+    currentState = STATE_IDLE;
+    multilineBuffer[0] = '\0';
+    currentHandler = NULL;
+    return PARSE_STATE_DONE;
+  }
+
+  size_t mlen = strlen(multilineBuffer);
+  size_t llen = strlen(line);
+  if (mlen + llen + 2 < sizeof(multilineBuffer)) {
+    strcat(multilineBuffer, line);
+    strcat(multilineBuffer, "\n");
+  }
+
+  return PARSE_STATE_IN_PROGRESS;
+}
+
+
 parse_state_t sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
 #endif
 
   if (currentState == STATE_ACCUMULATING_MULTILINE) {
-#ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Accumulating multiline: \"%s\"", line);
-#endif
-    // Очистка строки от \r\n и пробелов
-    char cleaned[64];
-    trim_whitespace(cleaned, line);
-
-#ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "cleaned: \"%s\"", cleaned);
-#endif
-
-    if (strcmp(cleaned, SIM900D_RESP_OK) == 0 || strcmp(cleaned, SIM900D_RESP_ERROR) == 0) {
-      // Завершение многострочного сообщения
-      size_t len = strlen(multilineBuffer);
-      while (len > 0 && (multilineBuffer[len - 1] == '\n' || multilineBuffer[len - 1] == '\r')) {
-        multilineBuffer[--len] = '\0';
-      }
-
-      strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody) - 1);
-      currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
-
-#ifdef SIM900D_VERBOSE
-      ESP_LOGV(TAG, "Multiline end detected. Handler: %p", (void *)currentHandler);
-#endif
-      if (currentHandler) {
-        currentHandler(&currentParams);
-      }
-
-      currentState = STATE_IDLE;
-      multilineBuffer[0] = '\0';
-      currentHandler = NULL;
-      return PARSE_STATE_DONE;
-    }
-
-    // Добавление строки в тело сообщения
-    size_t mlen = strlen(multilineBuffer);
-    size_t llen = strlen(line);
-    if (mlen + llen + 2 < sizeof(multilineBuffer)) {
-      strcat(multilineBuffer, line);
-      strcat(multilineBuffer, "\n");
-    }
-    return PARSE_STATE_IN_PROGRESS;
+    return sim900d_handle_multiline_response_continue(line);
   }
 
   const char *paramStart = NULL;
@@ -292,80 +355,16 @@ parse_state_t sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
     ESP_LOGV(TAG, "Handler found for prefix: \"%s\"", prefix);
 #endif
-    // Пропускаем разделители после префикса
     const char *p = paramStart;
     while (*p == ':' || *p == ' ' || *p == '\t')
       p++;
 
-    // Если это многострочный ответ, переходим в режим накопления
     if (strcmp(prefix, SIM900D_RESP_CMGR) == 0 || strcmp(prefix, SIM900D_RESP_CMGL) == 0) {
 #ifdef SIM900D_VERBOSE
       ESP_LOGV(TAG, "Switching to multiline accumulation for prefix: \"%s\"", prefix);
 #endif
-      currentState = STATE_ACCUMULATING_MULTILINE;
-      multilineBuffer[0] = '\0';
-      currentHandler = handlerTable[foundIndex];
-
-      // Для многострочного ответа парсим параметры как обычно
-      char buffer[MAX_PARAM_LEN];
-      int bufIndex = 0;
-      int inQuote = 0;
-
-      currentParams.paramCount = 0;
-      currentParams.multilineBody[0] = '\0';
-      currentParams.result = true;
-
-      // Парсим параметры
-      while (*p && currentParams.paramCount < MAX_PARAMS) {
-        if (*p == '"') {
-          inQuote = !inQuote;
-        } else if (*p == ',' && !inQuote) {
-          buffer[bufIndex] = '\0';
-          strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN - 1);
-          currentParams.params[currentParams.paramCount][MAX_PARAM_LEN - 1] = '\0';
-#ifdef SIM900D_VERBOSE
-          ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
-#endif
-          currentParams.paramCount++;
-          bufIndex = 0;
-        } else if ((*p == '\r' || *p == '\n') && !inQuote) {
-          break; // конец параметров, возможно начинается текст
-        } else {
-          if (bufIndex < MAX_PARAM_LEN - 1) {
-            buffer[bufIndex++] = *p;
-          }
-        }
-        p++;
-      }
-
-      if (bufIndex > 0 && currentParams.paramCount < MAX_PARAMS) {
-        buffer[bufIndex] = '\0';
-        strncpy(currentParams.params[currentParams.paramCount], buffer, MAX_PARAM_LEN - 1);
-        currentParams.params[currentParams.paramCount][MAX_PARAM_LEN - 1] = '\0';
-#ifdef SIM900D_VERBOSE
-        ESP_LOGV(TAG, "Param[%d]: \"%s\"", currentParams.paramCount, buffer);
-#endif
-        currentParams.paramCount++;
-      }
-
-      // Пропускаем пробелы и символы перевода строки
-      while (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t')
-        p++;
-
-      if (*p) {
-        // Есть текст в той же строке, начинаем буфер с него
-        strncpy(multilineBuffer, p, sizeof(multilineBuffer) - 1);
-        multilineBuffer[sizeof(multilineBuffer) - 1] = '\0';
-      } else {
-        multilineBuffer[0] = '\0';
-      }
-
-#ifdef SIM900D_VERBOSE
-      ESP_LOGV(TAG, "Multiline start buffer: \"%s\"", multilineBuffer);
-#endif
-      return PARSE_STATE_IN_PROGRESS;
+      return sim900d_handle_multiline_response_start(prefix, p, foundIndex);
     } else {
-      // Обработка однострочного ответа
       sim900d_handle_singleline_response(prefix, p, foundIndex);
       return PARSE_STATE_DONE;
     }
