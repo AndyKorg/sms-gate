@@ -11,7 +11,7 @@
 #define SIM900D_VERBOSE
 #ifdef SIM900D_VERBOSE
 #undef LOG_LOCAL_LEVEL
-#define LOG_LOCAL_LEVEL ESP_LOG_ERROR
+#define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
 #include "esp_log.h"
 #endif
 
@@ -50,69 +50,6 @@ static void sim900d_handler_task(void *pvParameters) {
       }
     }
   }
-}
-
-esp_err_t sim900d_parser_init() {
-#if CONFIG_LOG_DEFAULT_LEVEL > 1
-  esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
-#endif
-
-  handlerCount = 0;
-  currentState = STATE_IDLE;
-  currentHandler = NULL;
-  multilineBuffer[0] = '\0';
-  for (int i = 0; i < MAX_HANDLERS; i++) {
-    handlerPrefixes[i] = NULL;
-  }
-
-  if (!sim900d_handler_queue) {
-    sim900d_handler_queue = xQueueCreate(SIM900D_HANDLER_QUEUE_LEN, sizeof(sim900d_handler_task_msg_t));
-    if (!sim900d_handler_queue) {
-#ifdef SIM900D_VERBOSE
-      ESP_LOGE(TAG, "Failed to create handler queue");
-#endif
-      return ESP_ERR_NO_MEM;
-    }
-    BaseType_t task_created = xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048*2, NULL, 8, NULL);
-    if (task_created != pdPASS) {
-#ifdef SIM900D_VERBOSE
-      ESP_LOGE(TAG, "Failed to create handler task");
-#endif
-      vQueueDelete(sim900d_handler_queue);
-      sim900d_handler_queue = NULL;
-      return ESP_ERR_NO_MEM;
-    }
-  }
-  return ESP_OK;
-}
-
-esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
-  if (!prefix || prefix[0] == '\0') {
-    return ESP_ERR_INVALID_ARG;
-  }
-  for (int i = 0; i < handlerCount; i++) {
-    if (strcmp(handlerPrefixes[i], prefix) == 0) {
-      if (handler == NULL) {
-        // Удаляем обработчик и сдвигаем массивы
-        for (int j = i; j < handlerCount - 1; j++) {
-          handlerPrefixes[j] = handlerPrefixes[j + 1];
-          handlerTable[j] = handlerTable[j + 1];
-        }
-        handlerCount--;
-        return ESP_OK;
-      } else {
-        handlerTable[i] = handler;
-        return ESP_OK;
-      }
-    }
-  }
-  if (handler != NULL && handlerCount < MAX_HANDLERS) {
-    handlerPrefixes[handlerCount] = prefix;
-    handlerTable[handlerCount] = handler;
-    handlerCount++;
-    return ESP_OK;
-  }
-  return ESP_ERR_NO_MEM;
 }
 
 // Обработка однострочных ответов
@@ -234,6 +171,93 @@ static void trim_whitespace(char *dst, const char *src) {
   dst[len] = '\0';
 }
 
+/**
+ * @brief Проверяет, является ли строка допустимым UCS2 (UTF-16BE) HEX-представлением.
+ */
+static bool is_valid_ucs2_hex(const char *str) {
+  size_t len = strlen(str);
+  if (len < 4 || len % 4 != 0)
+    return false;
+
+  for (size_t i = 0; i < len; ++i) {
+    if (!isxdigit((unsigned char)str[i])) {
+      return false; // Не HEX-цифра
+    }
+  }
+
+  for (size_t i = 0; i < len; i += 4) {
+    // Преобразуем 4 HEX-символа в 2 байта
+    char hex_byte[5] = {0}; // 4 символа + \0
+    hex_byte[0] = str[i];
+    hex_byte[1] = str[i + 1];
+    hex_byte[2] = '\0';
+    uint8_t high;
+    if (sscanf(hex_byte, "%2hhx", &high) != 1)
+      return false;
+
+    hex_byte[0] = str[i + 2];
+    hex_byte[1] = str[i + 3];
+    hex_byte[2] = '\0';
+    uint8_t low;
+    if (sscanf(hex_byte, "%2hhx", &low) != 1)
+      return false;
+
+    uint16_t code_unit = (high << 8) | low;
+
+    // Проверка недопустимых диапазонов UCS2 (UTF-16)
+    if ((code_unit >= 0xD800 && code_unit <= 0xDFFF) || // суррогаты
+        code_unit == 0xFFFE || code_unit == 0xFFFF) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * @brief Преобразует строку в формате UCS2 HEX (UTF-16BE) в UTF-8.
+ * @param hex_str Входная строка, например "041F04400438043204350442"
+ * @return malloc-строка с результатом в UTF-8, нужно освободить через free(), или NULL при ошибке.
+ */
+static char *ucs2_hex_to_utf8(const char *hex_str) {
+  if (!hex_str)
+    return NULL;
+
+  size_t hex_len = strlen(hex_str);
+  if (hex_len % 4 != 0)
+    return NULL; // каждый символ — 4 hex-цифры (2 байта)
+
+  size_t max_chars = hex_len / 4;
+  size_t max_utf8_len = max_chars * 3 + 1; // UTF-8 до 3 байт на символ
+  char *utf8_str = malloc(max_utf8_len);
+  if (!utf8_str)
+    return NULL;
+
+  size_t utf8_index = 0;
+  for (size_t i = 0; i < hex_len; i += 4) {
+    char hex_code[5] = {hex_str[i], hex_str[i + 1], hex_str[i + 2], hex_str[i + 3], '\0'};
+    uint16_t code_unit;
+    if (sscanf(hex_code, "%4hx", &code_unit) != 1) {
+      free(utf8_str);
+      return NULL;
+    }
+
+    if (code_unit <= 0x7F) {
+      utf8_str[utf8_index++] = (char)code_unit;
+    } else if (code_unit <= 0x7FF) {
+      utf8_str[utf8_index++] = 0xC0 | ((code_unit >> 6) & 0x1F);
+      utf8_str[utf8_index++] = 0x80 | (code_unit & 0x3F);
+    } else {
+      utf8_str[utf8_index++] = 0xE0 | ((code_unit >> 12) & 0x0F);
+      utf8_str[utf8_index++] = 0x80 | ((code_unit >> 6) & 0x3F);
+      utf8_str[utf8_index++] = 0x80 | (code_unit & 0x3F);
+    }
+  }
+
+  utf8_str[utf8_index] = '\0';
+  return utf8_str;
+}
+
 static parse_state_t sim900d_handle_multiline_response_start(const char *prefix, const char *p, int foundIndex) {
   currentState = STATE_ACCUMULATING_MULTILINE;
   multilineBuffer[0] = '\0';
@@ -307,16 +331,49 @@ static parse_state_t sim900d_handle_multiline_response_continue(const char *line
 
   if (strcmp(cleaned, SIM900D_RESP_OK) == 0 || strcmp(cleaned, SIM900D_RESP_ERROR) == 0) {
     size_t len = strlen(multilineBuffer);
-    while (len > 0 && (multilineBuffer[len - 1] == '\n' || multilineBuffer[len - 1] == '\r')) {
+    while (len > 0 && (multilineBuffer[len - 1] == '\n' || multilineBuffer[len - 1] == '\r'))
       multilineBuffer[--len] = '\0';
+
+    // --- Исправление: выделяем только первую строку (HEX-текст SMS) ---
+    char *body_end = strpbrk(multilineBuffer, "\r\n");
+    char sms_body[MAX_PARAM_LEN * 4] = {0};
+    if (body_end) {
+      size_t body_len = body_end - multilineBuffer;
+      if (body_len >= sizeof(sms_body))
+        body_len = sizeof(sms_body) - 1;
+      strncpy(sms_body, multilineBuffer, body_len);
+      sms_body[body_len] = '\0';
+    } else {
+      strncpy(sms_body, multilineBuffer, sizeof(sms_body) - 1);
+      sms_body[sizeof(sms_body) - 1] = '\0';
     }
 
-    strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody) - 1);
+    strncpy(currentParams.multilineBody, sms_body, sizeof(currentParams.multilineBody) - 1);
     currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
 
+    if (is_valid_ucs2_hex(currentParams.multilineBody)) {
+      char *utf8 = ucs2_hex_to_utf8(currentParams.multilineBody);
+      if (utf8) {
 #ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Multiline end detected. Handler: %p", (void *)currentHandler);
+        ESP_LOGV(TAG, "Decoded UCS2 to UTF-8: %s", utf8);
 #endif
+        strncpy(currentParams.multilineBody, utf8, sizeof(currentParams.multilineBody) - 1);
+        currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
+        free(utf8);
+      } else {
+#ifdef SIM900D_VERBOSE
+        ESP_LOGW(TAG, "UCS2 decode failed, sending raw HEX");
+#endif
+      }
+    } else {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "Multiline body is plain text: %s", currentParams.multilineBody);
+#endif
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "Multiline end detected. Handler: %p", (void *)currentHandler);
+#endif
+    }
+
     if (currentHandler) {
       currentHandler(&currentParams);
     }
@@ -335,45 +392,6 @@ static parse_state_t sim900d_handle_multiline_response_continue(const char *line
   }
 
   return PARSE_STATE_IN_PROGRESS;
-}
-
-
-parse_state_t sim900d_parse_line(const char *line) {
-#ifdef SIM900D_VERBOSE
-  ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
-#endif
-
-  if (currentState == STATE_ACCUMULATING_MULTILINE) {
-    return sim900d_handle_multiline_response_continue(line);
-  }
-
-  const char *paramStart = NULL;
-  int foundIndex = sim900d_find_prefix(line, &paramStart);
-
-  if (foundIndex != -1) {
-    const char *prefix = handlerPrefixes[foundIndex];
-#ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Handler found for prefix: \"%s\"", prefix);
-#endif
-    const char *p = paramStart;
-    while (*p == ':' || *p == ' ' || *p == '\t')
-      p++;
-
-    if (strcmp(prefix, SIM900D_RESP_CMGR) == 0 || strcmp(prefix, SIM900D_RESP_CMGL) == 0) {
-#ifdef SIM900D_VERBOSE
-      ESP_LOGV(TAG, "Switching to multiline accumulation for prefix: \"%s\"", prefix);
-#endif
-      return sim900d_handle_multiline_response_start(prefix, p, foundIndex);
-    } else {
-      sim900d_handle_singleline_response(prefix, p, foundIndex);
-      return PARSE_STATE_DONE;
-    }
-  }
-
-#ifdef SIM900D_VERBOSE
-  ESP_LOGV(TAG, "Unrecognized line: \"%s\"", line);
-#endif
-  return PARSE_STATE_DONE;
 }
 
 int *sim900d_parse_number_list(const char *str, int *outCount) {
@@ -442,4 +460,105 @@ int *sim900d_parse_number_list(const char *str, int *outCount) {
 
   *outCount = count;
   return numbers;
+}
+
+parse_state_t sim900d_parse_line(const char *line) {
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
+#endif
+
+  if (currentState == STATE_ACCUMULATING_MULTILINE) {
+    return sim900d_handle_multiline_response_continue(line);
+  }
+
+  const char *paramStart = NULL;
+  int foundIndex = sim900d_find_prefix(line, &paramStart);
+
+  if (foundIndex != -1) {
+    const char *prefix = handlerPrefixes[foundIndex];
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Handler found for prefix: \"%s\"", prefix);
+#endif
+    const char *p = paramStart;
+    while (*p == ':' || *p == ' ' || *p == '\t')
+      p++;
+
+    if (strcmp(prefix, SIM900D_RESP_CMGR) == 0 || strcmp(prefix, SIM900D_RESP_CMGL) == 0) {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "Switching to multiline accumulation for prefix: \"%s\"", prefix);
+#endif
+      return sim900d_handle_multiline_response_start(prefix, p, foundIndex);
+    } else {
+      sim900d_handle_singleline_response(prefix, p, foundIndex);
+      return PARSE_STATE_DONE;
+    }
+  }
+
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "Unrecognized line: \"%s\"", line);
+#endif
+  return PARSE_STATE_DONE;
+}
+
+esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
+  if (!prefix || prefix[0] == '\0') {
+    return ESP_ERR_INVALID_ARG;
+  }
+  for (int i = 0; i < handlerCount; i++) {
+    if (strcmp(handlerPrefixes[i], prefix) == 0) {
+      if (handler == NULL) {
+        // Удаляем обработчик и сдвигаем массивы
+        for (int j = i; j < handlerCount - 1; j++) {
+          handlerPrefixes[j] = handlerPrefixes[j + 1];
+          handlerTable[j] = handlerTable[j + 1];
+        }
+        handlerCount--;
+        return ESP_OK;
+      } else {
+        handlerTable[i] = handler;
+        return ESP_OK;
+      }
+    }
+  }
+  if (handler != NULL && handlerCount < MAX_HANDLERS) {
+    handlerPrefixes[handlerCount] = prefix;
+    handlerTable[handlerCount] = handler;
+    handlerCount++;
+    return ESP_OK;
+  }
+  return ESP_ERR_NO_MEM;
+}
+
+esp_err_t sim900d_parser_init() {
+#if CONFIG_LOG_DEFAULT_LEVEL > 1
+  esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
+#endif
+
+  handlerCount = 0;
+  currentState = STATE_IDLE;
+  currentHandler = NULL;
+  multilineBuffer[0] = '\0';
+  for (int i = 0; i < MAX_HANDLERS; i++) {
+    handlerPrefixes[i] = NULL;
+  }
+
+  if (!sim900d_handler_queue) {
+    sim900d_handler_queue = xQueueCreate(SIM900D_HANDLER_QUEUE_LEN, sizeof(sim900d_handler_task_msg_t));
+    if (!sim900d_handler_queue) {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGE(TAG, "Failed to create handler queue");
+#endif
+      return ESP_ERR_NO_MEM;
+    }
+    BaseType_t task_created = xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048 * 2, NULL, 8, NULL);
+    if (task_created != pdPASS) {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGE(TAG, "Failed to create handler task");
+#endif
+      vQueueDelete(sim900d_handler_queue);
+      sim900d_handler_queue = NULL;
+      return ESP_ERR_NO_MEM;
+    }
+  }
+  return ESP_OK;
 }
