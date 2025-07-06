@@ -21,7 +21,7 @@ static const char *TAG = "SIM900";
 
 #define UART_BUF_SIZE 1024
 
-#define SIM900D_NO_INDEX_MEM  -1
+#define SIM900D_NO_INDEX_MEM -1
 
 typedef struct {
   uart_port_t uart_num;
@@ -31,12 +31,12 @@ typedef struct {
   network_status_callback_t network_status_cb;
   TaskHandle_t uart_task_handle;
   TaskHandle_t sms_task_handle;
-  int last_sms_index;   //Запрошенный индекс СМС из памяти sim900
+  int last_sms_index; // Запрошенный индекс СМС из памяти sim900
   TaskHandle_t network_task_handle;
   TaskHandle_t lowprio_cmd_task; // Обработка очереди низкоприоритетных команд
   gpio_num_t pwrkey_gpio;
   gpio_num_t status_gpio;
-  gpio_num_t ri_gpio; // Может быть неопределен
+  gpio_num_t ri_gpio;                  // Может быть неопределен
   EventGroupHandle_t uart_event_group; // Состояние драйвера
 } sim900d_uart_handle_t;
 
@@ -150,7 +150,7 @@ static void sim900d_cpms_handler(Sim900dParsedParams *params) {
  */
 static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < 4) {
-    ESP_LOGE(TAG, SIM900D_RESP_CMGR " invalid params %d", params ? params->paramCount: 0);
+    ESP_LOGE(TAG, SIM900D_RESP_CMGR " invalid params %d", params ? params->paramCount : 0);
     return;
   }
   for (int i = 0; i < params->paramCount; ++i) {
@@ -163,7 +163,7 @@ static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
   strncpy(sms.sender, params->params[1], sizeof(sms.sender) - 1);
   strncpy(sms.timestamp, params->params[3], sizeof(sms.timestamp) - 1);
   strncpy(sms.text, params->multilineBody, sizeof(sms.text) - 1);
-  if (handle.last_sms_index != SIM900D_NO_INDEX_MEM){
+  if (handle.last_sms_index != SIM900D_NO_INDEX_MEM) {
     sms.index = handle.last_sms_index;
   }
   if (handle.sms_queue) {
@@ -190,25 +190,11 @@ static void sim900d_cmti_handler(Sim900dParsedParams *params) {
 }
 
 /**
- * @brief Обработчик параметров уведомлений о новых сообщениях (CNMI).
- */
-static void sim900d_cnmi_handler(Sim900dParsedParams *params) {
-  if (!params->result) {
-    ESP_LOGE(TAG, "CNMI fault!");
-    sim900d_register_handler(SIM900D_RESP_CMTI, NULL);
-    // TODO: Добавить тут создание задачи периодической проверки смс
-  } else {
-    sim900d_register_handler(SIM900D_RESP_CMTI, sim900d_cmti_handler);
-  }
-  sim900d_send_at(SIM900D_CMD_CPMS, NULL, 0, pdMS_TO_TICKS(SIM900D_UART_TX_WAIT_MS));
-}
-
-/**
  * @brief Обработчик параметров уведомлений о новых SMS (CNMI).
  */
 static void sim900d_cnmi_test_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < SIM900D_CNMI_PARAM_MAX) {
-    ESP_LOGE(TAG, SIM900D_RESP_CNMI " invalid params");
+    ESP_LOGE(TAG, SIM900D_RESP_CNMI_TEST " invalid params");
     return;
   }
   ESP_LOGI(TAG, "CNMI response:");
@@ -346,10 +332,11 @@ static void sim900d_register_hndlers() {
   bool ok = true;
   ok &= sim900d_register_handler(SIM900D_RESP_CPIN, sim900d_cpin_handler) == ESP_OK;
   ok &= sim900d_register_handler(SIM900D_RESP_CREG, sim900d_creg_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_CNMI, sim900d_cnmi_test_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_SMS_NOTIFY, sim900d_cnmi_handler) == ESP_OK;
+  ok &= sim900d_register_handler(SIM900D_RESP_SMS_NOTIFY, sim900d_cnmi_test_handler) == ESP_OK;
   ok &= sim900d_register_handler(SIM900D_RESP_CPMS, sim900d_cpms_handler) == ESP_OK;
   ok &= sim900d_register_handler(SIM900D_RESP_CMGR, sim900d_cmgr_handler) == ESP_OK;
+  ok &= sim900d_register_handler(SIM900D_RESP_CMTI, sim900d_cmti_handler) == ESP_OK;
+
   if (!ok) {
     ESP_LOGE(TAG, "Failed to register SIM900D response handlers");
   }
@@ -483,10 +470,10 @@ static void sim900d_sms_task(void *pvParameters) {
   while (1) {
     if (xQueueReceive(handle.sms_queue, &sms, portMAX_DELAY) == pdTRUE) {
       if (handle.sms_queue) {
-        //СМС удачно обработана и она была в памяти
-        if ((handle.sms_cb(&sms) == ESP_OK) && (sms.index != SIM900D_NO_INDEX_MEM)){
+        // СМС удачно обработана и она была в памяти
+        if ((handle.sms_cb(&sms) == ESP_OK) && (sms.index != SIM900D_NO_INDEX_MEM)) {
           char del_cmd[32];
-          snprintf(del_cmd, sizeof(del_cmd),  SIM900D_CMD_DELETE_SMS_BY_INDEX_FMT, sms.index);
+          snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS_BY_INDEX_FMT, sms.index);
           sim900d_enqueue_lowprio_cmd(del_cmd, pdMS_TO_TICKS(500));
         }
       }
@@ -672,7 +659,7 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
     sim900d_uart_cleanup(uart_num);
     return ESP_ERR_NO_MEM;
   }
-  if (xTaskCreate(sim900d_lowprio_cmd_task, "sim900d_lowprio_cmd_task", 2048*2, NULL, 1, &handle.lowprio_cmd_task) !=
+  if (xTaskCreate(sim900d_lowprio_cmd_task, "sim900d_lowprio_cmd_task", 2048 * 2, NULL, 1, &handle.lowprio_cmd_task) !=
       pdPASS) {
     sim900d_uart_cleanup(uart_num);
     return ESP_ERR_NO_MEM;
