@@ -3,6 +3,8 @@
 
 // --- Коды команд и ответов ---
 #define SIM900D_AT      "AT"
+#define SIM900D_ATE     "ATE"     //Режим эхо вкл/выкл
+#define SIM900D_ATV     "ATV"     //вывод результата - текстом или числом
 #define SIM900D_CMGF    "CMGF"
 #define SIM900D_CNMI    "CNMI"
 #define SIM900D_CMGR    "CMGR"    //чтения SMS-сообщения из памяти SIM900D
@@ -19,28 +21,6 @@
 #define SIM900D_CPMS    "CPMS"
 #define SIM900D_CMGDA   "CMGDA"   // удаления всех SMS
 #define SIM900D_CMGD    "CMGD"    // удаления SMS по индексу
-
-/***********************************************
-            Команды
-***********************************************/
-
-/**
- * @brief Базовая AT-команда для инициализации связи с SIM900D.
- */
-#define SIM900D_CMD_AT SIM900D_AT "\r\n"
-
-/**
- * @brief Установка текстового режима SMS (AT+CMGF=1).
- */
-#define SIM900D_CMD_SMS_MODE SIM900D_AT "+CMGF=1\r\n"
-
-/**
- * @brief AT-команда для проверки поддерживаемых параметров команды +CNMI на модуле SIM900D.
- *
- * Эта команда запрашивает у модема поддерживаемые значения параметров команды +CNMI (уведомления о новых SMS).
- * В ответе модем укажет, какие значения параметров допустимы для настройки уведомлений о новых SMS-сообщениях.
- */
-#define SIM900D_RESP_CNMI_TEST  SIM900D_AT "+" SIM900D_CNMI "=?\r\n"
 
 /**
  * @brief Перечисление параметров команды AT+CNMI.
@@ -102,45 +82,44 @@ typedef enum {
     SIM900D_CNMI_BFR_ENABLE = 1   /**< Выводить сообщения из буфера при включении. */
 } sim900d_cnmi_bfr_t;
 
-/**
- * @brief Включение уведомлений о новых SMS (AT+CNMI=2,1,0,0,0).
- */
-#define SIM900D_CMD_SMS_NOTIFY SIM900D_AT "+" SIM900D_CNMI "=2,1,0,0,0\r\n"
+/***********************************************
+            Команды и ответы
+***********************************************/
 
 /**
- * @brief Форматированная команда для чтения SMS по индексу (AT+CMGR=%d).
+ * @brief Базовая AT-команда для инициализации связи с SIM900D.
  */
-#define SIM900D_CMD_READ_SMS_FMT SIM900D_AT "+" SIM900D_CMGR "=%d\r\n"
+#define SIM900D_CMD_AT SIM900D_AT "\r\n"
 
 /**
- * @brief Форматированная команда для чтения списка SMS (AT+CMGL="%s").
+ * @brief Ответ модуля об успешном выполнении команды ("OK").
  */
-#define SIM900D_CMD_LIST_SMS_FMT SIM900D_AT "+" SIM900D_CMGL "=\"%s\"\r\n"
+#define SIM900D_RESP_OK SIM900D_OK
 
 /**
- * @brief Запрос состояния PIN-кода SIM-карты (AT+CPIN?).
+ * @brief Ответ модуля об ошибке ("ERROR").
  */
-#define SIM900D_CMD_CPIN SIM900D_AT "+" SIM900D_CPIN "?\r\n"
+#define SIM900D_RESP_ERROR SIM900D_ERROR
 
 /**
- * @brief Запрос статуса регистрации в сети (AT+CREG?).
+ * @brief Ответ модуля о готовоности.
  */
-#define SIM900D_CMD_CREG SIM900D_AT "+" SIM900D_CREG "?\r\n"
+#define SIM900D_RESP_READY SIM900D_READY
 
 /**
- * @brief Запрос статуса регистрации в GPRS-сети (AT+CGREG?).
+ * @brief Выключение эха.
  */
-#define SIM900D_CMD_CGREG SIM900D_AT "+" SIM900D_CGREG "?\r\n"
+#define SIM900D_ECHO_OFF SIM900D_ATE "0"
 
 /**
- * @brief Запрос уровня сигнала (AT+CSQ).
+ * @brief Включение эха.
  */
-#define SIM900D_CMD_CSQ SIM900D_AT "+" SIM900D_CSQ "\r\n"
+#define SIM900D_ECHO_ON SIM900D_ATE "1"
 
 /**
- * @brief Запрос информации об операторе (AT+COPS?).
+ * @brief Установка текстового режима SMS (AT+CMGF=1).
  */
-#define SIM900D_CMD_COPS SIM900D_AT "+" SIM900D_COPS "?\r\n"
+#define SIM900D_CMD_SMS_MODE SIM900D_AT "+CMGF=1\r\n"
 
 /**
  * @brief AT-команда для проверки поддерживаемых параметров команды +CNMI на модуле SIM900D.
@@ -151,9 +130,100 @@ typedef enum {
 #define SIM900D_RESP_CNMI_TEST  SIM900D_AT "+" SIM900D_CNMI "=?\r\n"
 
 /**
+ * @brief Префикс ответа на команду настройки уведомлений ("AT+CNMI=")
+ * 
+ */
+#define SIM900D_RESP_SMS_NOTIFY "+" SIM900D_CNMI ":"
+
+/**
+ * @brief Включение уведомлений о новых SMS (AT+CNMI=2,1,0,0,0).
+ */
+#define SIM900D_CMD_SMS_NOTIFY SIM900D_AT "+" SIM900D_CNMI "=2,1,0,0,0\r\n"
+
+/**
+ * @brief Префикс уведомления о новом SMS ("+CMTI:").
+ */
+#define SIM900D_RESP_CMTI "+" SIM900D_CMTI ":"
+
+/**
+ * @brief Форматированная команда для чтения SMS по индексу (AT+CMGR=%d).
+ */
+#define SIM900D_CMD_READ_SMS_FMT SIM900D_AT "+" SIM900D_CMGR "=%d\r\n"
+
+/**
+ * @brief Префикс ответа на команду чтения SMS ("+CMGR:").
+ */
+#define SIM900D_RESP_CMGR "+" SIM900D_CMGR ":"
+
+/**
+ * @brief Форматированная команда для чтения списка SMS (AT+CMGL="%s").
+ */
+#define SIM900D_CMD_LIST_SMS_FMT SIM900D_AT "+" SIM900D_CMGL "=\"%s\"\r\n"
+
+/**
+ * @brief Префикс ответа на команду для чтения списка SMS (CMGL="%s").
+ */
+#define SIM900D_RESP_CMGL "+" SIM900D_CMGL ":"
+
+/**
+ * @brief Запрос состояния PIN-кода SIM-карты (AT+CPIN?).
+ */
+#define SIM900D_CMD_CPIN SIM900D_AT "+" SIM900D_CPIN "?\r\n"
+
+/**
+ * @brief Префикс ответа на запрос PIN-кода ("+CPIN:").
+ */
+#define SIM900D_RESP_CPIN "+" SIM900D_CPIN ":"
+
+/**
+ * @brief Запрос статуса регистрации в сети (AT+CREG?).
+ */
+#define SIM900D_CMD_CREG SIM900D_AT "+" SIM900D_CREG "?\r\n"
+
+/**
+ * @brief Префикс ответа на запрос регистрации в сети ("+CREG:").
+ */
+#define SIM900D_RESP_CREG "+" SIM900D_CREG ":"
+
+/**
+ * @brief Запрос статуса регистрации в GPRS-сети (AT+CGREG?).
+ */
+#define SIM900D_CMD_CGREG SIM900D_AT "+" SIM900D_CGREG "?\r\n"
+
+/**
+ * @brief Префикс ответа на запрос регистрации в GPRS ("+CGREG:").
+ */
+#define SIM900D_RESP_CGREG "+" SIM900D_CGREG ":"
+
+/**
+ * @brief Запрос уровня сигнала (AT+CSQ).
+ */
+#define SIM900D_CMD_CSQ SIM900D_AT "+" SIM900D_CSQ "\r\n"
+
+/**
+ * @brief Префикс ответа на запрос уровня сигнала ("+CSQ:").
+ */
+#define SIM900D_RESP_CSQ "+" SIM900D_CSQ ":"
+
+/**
+ * @brief Запрос информации об операторе (AT+COPS?).
+ */
+#define SIM900D_CMD_COPS SIM900D_AT "+" SIM900D_COPS "?\r\n"
+
+/**
+ * @brief Префикс ответа на запрос информации об операторе ("+COPS:").
+ */
+#define SIM900D_RESP_COPS "+" SIM900D_COPS ":"
+
+/**
  * @brief Запрос состояния памяти SMS (AT+CPMS?).
  */
 #define SIM900D_CMD_CPMS SIM900D_AT "+" SIM900D_CPMS "?\r\n"
+
+/**
+ * @brief Префикс ответа на запрос состояния памяти SMS ("+CPMS:").
+ */
+#define SIM900D_RESP_CPMS "+" SIM900D_CPMS ":"
 
 /**
  * @brief Команда для удаления всех SMS из памяти (AT+CMGDA="DEL ALL").
@@ -195,79 +265,5 @@ typedef enum {
  * @details Удаляет SMS-сообщение с указанным индексом из памяти модуля.
  */
 #define SIM900D_CMD_DELETE_SMS_BY_INDEX_FMT SIM900D_AT "+"  SIM900D_CMGD "=%d\r\n"
-
-/***********************************************
-            Ответы и префиксы
-***********************************************/
-
-/**
- * @brief Ответ модуля об успешном выполнении команды ("OK").
- */
-#define SIM900D_RESP_OK SIM900D_OK
-
-/**
- * @brief Ответ модуля об ошибке ("ERROR").
- */
-#define SIM900D_RESP_ERROR SIM900D_ERROR
-
-/**
- * @brief Ответ модуля о готовоности.
- */
-#define SIM900D_RESP_READY SIM900D_READY
-
-/**
- * @brief Префикс уведомления о новом SMS ("+CMTI:").
- */
-#define SIM900D_RESP_CMTI "+" SIM900D_CMTI ":"
-
-/**
- * @brief Префикс ответа на команду чтения SMS ("+CMGR:").
- */
-#define SIM900D_RESP_CMGR "+" SIM900D_CMGR ":"
-
-/**
- * @brief Префикс ответа на команду для чтения списка SMS (CMGL="%s").
- */
-#define SIM900D_RESP_CMGL "+" SIM900D_CMGL ":"
-
-/**
- * @brief Префикс ответа на запрос PIN-кода ("+CPIN:").
- */
-#define SIM900D_RESP_CPIN "+" SIM900D_CPIN ":"
-
-/**
- * @brief Префикс ответа на запрос регистрации в сети ("+CREG:").
- */
-#define SIM900D_RESP_CREG "+" SIM900D_CREG ":"
-
-/**
- * @brief Префикс ответа на запрос регистрации в GPRS ("+CGREG:").
- */
-#define SIM900D_RESP_CGREG "+" SIM900D_CGREG ":"
-
-/**
- * @brief Префикс ответа на запрос уровня сигнала ("+CSQ:").
- */
-#define SIM900D_RESP_CSQ "+" SIM900D_CSQ ":"
-
-/**
- * @brief Префикс ответа на запрос информации об операторе ("+COPS:").
- */
-#define SIM900D_RESP_COPS "+" SIM900D_COPS ":"
-
-/**
- * @brief Префикс ответа на команду +CNMI ("+CNMI:").
- */
-#define SIM900D_RESP_CNMI "+" SIM900D_CNMI ":"
-
-/**
- * @brief Префикс ответа на команду настройки уведомлений ("AT+CNMI=")
- */
-#define SIM900D_RESP_SMS_NOTIFY SIM900D_AT "+" SIM900D_CNMI "="
-
-/**
- * @brief Префикс ответа на запрос состояния памяти SMS ("+CPMS:").
- */
-#define SIM900D_RESP_CPMS "+" SIM900D_CPMS ":"
 
 #endif // SIM900D_COMMAND_H
