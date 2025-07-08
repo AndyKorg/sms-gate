@@ -141,8 +141,9 @@ static void sim900d_cpms_handler(Sim900dParsedParams *params) {
   bool mem_full = (used1 >= total1) || (used2 >= total2);
   if (mem_full) {
     ESP_LOGW(TAG, "SMS memory full, deleting all messages...");
-    sim900d_send_at(SIM900D_CMD_DELETE_ALL_SMS, NULL, 0, pdMS_TO_TICKS(SIM900D_UART_TX_WAIT_MS));
+    sim900d_enqueue_lowprio_cmd(SIM900D_CMD_DELETE_ALL_SMS, 60000); // 1 минуту ждет
   }
+  sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
 }
 
 /**
@@ -263,7 +264,7 @@ static void sim900d_cpin_handler(Sim900dParsedParams *params) {
 
   if (strcmp(cpin_state, SIM900D_RESP_READY) == 0) {
     ESP_LOGI(TAG, "SIM card is ready");
-    sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
+    sim900d_send_at(SIM900D_CMD_CPMS, NULL, 0, pdMS_TO_TICKS(500));
   } else if (strcmp(cpin_state, "SIM PIN") == 0) {
     ESP_LOGW(TAG, "SIM card requires PIN");
   } else if (strcmp(cpin_state, "SIM PUK") == 0) {
