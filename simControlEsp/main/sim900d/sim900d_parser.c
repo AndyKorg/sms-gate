@@ -4,9 +4,11 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sim900d_command.h"
 #include "sim900d_parser.h"
+#include "sim900d_pdu.h"
 
 #define SIM900D_VERBOSE
 #ifdef SIM900D_VERBOSE
@@ -40,6 +42,9 @@ typedef struct {
 } sim900d_handler_task_msg_t;
 
 static QueueHandle_t sim900d_handler_queue = NULL;
+
+static sim900d_sms_mode_t sms_mode = SMS_MODE_TEXT;
+static SemaphoreHandle_t sms_mode_mutex = NULL;
 
 static void sim900d_handler_task(void *pvParameters) {
   sim900d_handler_task_msg_t msg;
@@ -304,7 +309,29 @@ static void sim900d_finish_multiline_response() {
   strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody) - 1);
   currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
 
-  if (is_valid_ucs2_hex(currentParams.multilineBody)) {
+  sim900d_sms_mode_t mode;
+  if (sms_mode_mutex) {
+    if (xSemaphoreTake(sms_mode_mutex, portMAX_DELAY) == pdTRUE) {
+      mode = sms_mode;
+      xSemaphoreGive(sms_mode_mutex);
+    } else {
+      mode = sms_mode;
+    }
+  } else {
+    mode = sms_mode;
+  }
+  currentParams.sms_mode = mode;
+
+  if (mode == SMS_MODE_PDU) {
+    // PDU-режим
+    sim900d_pdu_decoded_t pdu;
+    if (sim900d_decode_pdu(currentParams.params[1], &pdu)) {
+      strncpy(currentParams.params[0], pdu.sender, sizeof(currentParams.params[0]) - 1);
+      strncpy(currentParams.params[1], pdu.timestamp, sizeof(currentParams.params[1]) - 1);
+      strncpy(currentParams.multilineBody, pdu.text, sizeof(currentParams.multilineBody) - 1);
+      currentParams.paramCount = 3; // sender, timestamp, text
+    }
+  } else if (is_valid_ucs2_hex(currentParams.multilineBody)) {
     char *utf8 = ucs2_hex_to_utf8(currentParams.multilineBody);
     if (utf8) {
       strncpy(currentParams.multilineBody, utf8, sizeof(currentParams.multilineBody) - 1);
@@ -494,6 +521,24 @@ esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
     return ESP_OK;
   }
   return ESP_ERR_NO_MEM;
+}
+
+esp_err_t sim900d_set_sms_mode(sim900d_sms_mode_t mode) {
+  if (mode != SMS_MODE_TEXT && mode != SMS_MODE_PDU) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (!sms_mode_mutex) {
+    sms_mode_mutex = xSemaphoreCreateMutex();
+    if (!sms_mode_mutex) {
+      return ESP_ERR_NO_MEM;
+    }
+  }
+  if (xSemaphoreTake(sms_mode_mutex, portMAX_DELAY) == pdTRUE) {
+    sms_mode = mode;
+    xSemaphoreGive(sms_mode_mutex);
+    return ESP_OK;
+  }
+  return ESP_FAIL;
 }
 
 esp_err_t sim900d_parser_init() {

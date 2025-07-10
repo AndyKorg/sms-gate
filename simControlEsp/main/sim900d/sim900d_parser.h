@@ -5,6 +5,19 @@
 #define MAX_PARAM_LEN 64
 #define MAX_HANDLERS 10
 
+/**
+ * @enum sim900d_sms_mode_t
+ * @brief Режимы работы SMS для модуля SIM900D.
+ *
+ * Этот перечисляемый тип определяет режимы отправки и получения SMS:
+ * - SMS_MODE_TEXT: Текстовый режим (1) — сообщения передаются в обычном текстовом виде.
+ * - SMS_MODE_PDU: PDU режим (2) — сообщения передаются в закодированном формате PDU.
+ */
+typedef enum {
+    SMS_MODE_TEXT = 1,
+    SMS_MODE_PDU = 2
+} sim900d_sms_mode_t;
+
 typedef struct {
     char params[MAX_PARAMS][MAX_PARAM_LEN];
     int paramCount;
@@ -13,6 +26,8 @@ typedef struct {
 
     // Дополнительно для многострочного ответа:
     char multilineBody[512]; // SMS тело, может быть multiline
+    // Кодировка в которой было принято смс. Для однострочных ответов не определено
+    sim900d_sms_mode_t sms_mode;
 } Sim900dParsedParams;
 
 // Обработчик
@@ -72,6 +87,14 @@ parse_state_t sim900d_parse_line(const char* line);
  * @return int* Указатель на массив чисел (выделяется через malloc, не забудьте освободить)
  */
 int* sim900d_parse_number_list(const char* str, int* outCount);
+
+/**
+ * @brief Устанавливает текущий режим SMS (текстовый или PDU).
+ *
+ * @param mode Режим SMS (SMS_MODE_TEXT или SMS_MODE_PDU)
+ * @return ESP_OK при успешной установке, ESP_ERR_INVALID_ARG при ошибке аргументов
+ */
+esp_err_t sim900d_set_sms_mode(sim900d_sms_mode_t mode);
 
 /**
  * @brief Инициализация парсера SIM900D.
