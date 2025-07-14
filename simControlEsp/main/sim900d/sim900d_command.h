@@ -5,7 +5,7 @@
 #define SIM900D_AT      "AT"
 #define SIM900D_ATE     "ATE"     //Режим эхо вкл/выкл
 #define SIM900D_ATV     "ATV"     //вывод результата - текстом или числом
-#define SIM900D_CMGF    "CMGF"
+#define SIM900D_CMGF    "CMGF"    //режим вывода смс - простой текст или pdu
 #define SIM900D_CNMI    "CNMI"
 #define SIM900D_CMGR    "CMGR"    //чтения SMS-сообщения из памяти SIM900D
 #define SIM900D_CMGL    "CMGL"
@@ -260,10 +260,16 @@ typedef enum {
  * @details Удаляет только входящие сообщения.
  */
 #define SIM900D_CMD_DELETE_INBOX_SMS  SIM900D_AT "+" SIM900D_CMGDA "=\"DEL INBOX\"\r\n"
+
 /**
  * @brief Форматированная команда для удаления SMS по индексу (AT+CMGD=%d).
  * @details Удаляет SMS-сообщение с указанным индексом из памяти модуля.
  */
 #define SIM900D_CMD_DELETE_SMS_BY_INDEX_FMT SIM900D_AT "+"  SIM900D_CMGD "=%d\r\n"
+
+/**
+ * @brief Форматированная команда смены режима кодирования СМС (AT+CMGF=%d)
+ */
+#define SIM900D_CMD_CMGF_MODE   SIM900D_AT "+" SIM900D_CMGF "=%d\r\n"
 
 #endif // SIM900D_COMMAND_H
