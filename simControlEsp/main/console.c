@@ -8,8 +8,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "sim900d/sim900d_command.h"
-#include "sim900d/sim900d_parser.h"
+#include "../esp_components/sim900d_uart/sim900d_command.h"
+#include "../esp_components/sim900d_uart/sim900d_parser.h"
 
 
 #define UART_NUM UART_NUM_0

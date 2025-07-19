@@ -8,6 +8,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "sdkconfig.h"
 
 #undef LOG_LOCAL_LEVEL
 #define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
@@ -15,7 +16,7 @@
 
 static const char *TAG = "SIM900";
 
-#include "include/sim900d_uart.h"
+#include "sim900d_uart.h"
 #include "sim900d_command.h"
 #include "sim900d_handlers.h"
 #include "sim900d_parser.h"
