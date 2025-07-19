@@ -1,6 +1,14 @@
 #ifndef SIM900D_PARSER_H
 #define SIM900D_PARSER_H
 
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+#include "esp_err.h"
+
 #define MAX_PARAMS 10
 #define MAX_PARAM_LEN 64
 #define MAX_HANDLERS 10

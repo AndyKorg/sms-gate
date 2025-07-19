@@ -15,13 +15,13 @@
 
 static const char *TAG = "SIM900";
 
+#include "include/sim900d_uart.h"
 #include "sim900d_command.h"
+#include "sim900d_handlers.h"
 #include "sim900d_parser.h"
-#include "sim900d_uart.h"
+#include "sim900d_uart_internal.h"
 
 #define UART_BUF_SIZE 1024
-
-#define SIM900D_NO_INDEX_MEM -1
 
 typedef struct {
   uart_port_t uart_num;
@@ -31,7 +31,6 @@ typedef struct {
   network_status_callback_t network_status_cb;
   TaskHandle_t uart_task_handle;
   TaskHandle_t sms_task_handle;
-  int last_sms_index; // Запрошенный индекс СМС из памяти sim900
   TaskHandle_t network_task_handle;
   TaskHandle_t lowprio_cmd_task; // Обработка очереди низкоприоритетных команд
   gpio_num_t pwrkey_gpio;
@@ -46,15 +45,7 @@ static sim900d_uart_handle_t handle = {.uart_num = UART_NUM_MAX};
 static const int baud_list[] = {115200, 57600, 38400, 19200, 9600, 4800, 2400, 1200};
 #define SIM900D_UART_TX_WAIT_MS 1000
 
-// Разрешение чтения из uart
-#define SIM900D_UART_EVENT_READ_ENABLE (1 << 0)
-// Флаг успешной регистрации в сети
-#define SIM900D_UART_EVENT_NET_REGISTERED (1 << 1)
-// Флаг, указывающий, что драйвер занят обработкой ответа
-#define SIM900D_UART_EVENT_BUSY (1 << 2)
-
 // Очередь низкоприоритетных команд
-
 #define SIM900D_LOWPRIO_CMD_QUEUE_LEN 8
 #define SIM900D_LOWPRIO_CMD_MAX_LEN 128
 
@@ -64,9 +55,12 @@ typedef struct {
   TickType_t timeout;
 } sim900d_lowprio_cmd_t;
 
-// Отправка AT-команды и ожидание ответа с логированием
-static int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_t timeout) {
-  // Логируем отправляемую команду
+/******************************************************
+ * Низкоуровневые функции приема/передачи на sim900d
+ ****************************************************** */
+
+// Только для использования внтури драйвера!
+int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_t timeout) {
   ESP_LOGV(TAG, "UART->SIM900D: %s", cmd);
   // Драйвер занят
   xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
@@ -81,275 +75,12 @@ static int sim900d_send_at(const char *cmd, char *response, size_t resp_size, Ti
       ESP_LOGV(TAG, "SIM900D->UART: %s", response);
       return len;
     }
+
     response[0] = 0;
     ESP_LOGV(TAG, "SIM900D->UART: <no response>");
   }
+
   return 0;
-}
-
-static bool sim900d_int_array_contains(const int *arr, size_t len, int value) {
-  if (!arr || len == 0)
-    return false;
-  for (size_t i = 0; i < len; ++i) {
-    if (arr[i] == value)
-      return true;
-  }
-  return false;
-}
-
-/**
- * @brief Добавляет низкоприоритетную команду в очередь команд SIM900D.
- *
- * Эта функция помещает строку команды с заданным таймаутом в очередь низкоприоритетных команд.
- * Если очередь или команда не определены, возвращает false.
- *
- * Предназанчена прежде всего для команд обслуживания: проверка статуса сети, удаление прочитанных СМС и пр.
- *
- * @param cmd     Строка команды для отправки (не должна быть NULL).
- * @param timeout Таймаут ожидания отправки команды (тип TickType_t).
- * @return true, если команда успешно добавлена в очередь, иначе false.
- */
-static bool sim900d_enqueue_lowprio_cmd(const char *cmd, TickType_t timeout) {
-  if (!handle.lowprio_cmd_queue || !cmd)
-    return false;
-  sim900d_lowprio_cmd_t msg = {0};
-  strncpy(msg.cmd, cmd, SIM900D_LOWPRIO_CMD_MAX_LEN - 1);
-  msg.timeout = timeout;
-  return xQueueSend(handle.lowprio_cmd_queue, &msg, 0) == pdTRUE;
-}
-
-/****************************
- * HANDLERS
- **************************** */
-/**
- * @brief Обработчик параметров состояния памяти SMS (+CPMS).
- * Если память заполнена, очищает её.
- */
-static void sim900d_cpms_handler(Sim900dParsedParams *params) {
-  if (!params || params->paramCount < 6) {
-    ESP_LOGE(TAG, SIM900D_RESP_CPMS " invalid params");
-    return;
-  }
-  // params: <mem1>,<used1>,<total1>,<mem2>,<used2>,<total2>
-  int used1 = atoi(params->params[1]);
-  int total1 = atoi(params->params[2]);
-  int used2 = atoi(params->params[4]);
-  int total2 = atoi(params->params[5]);
-  ESP_LOGI(TAG, "CPMS: mem1=%s used1=%d total1=%d, mem2=%s used2=%d total2=%d", params->params[0], used1, total1,
-           params->params[3], used2, total2);
-
-  bool mem_full = (used1 >= total1) || (used2 >= total2);
-  if (mem_full) {
-    ESP_LOGW(TAG, "SMS memory full, deleting all messages...");
-    sim900d_enqueue_lowprio_cmd(SIM900D_CMD_DELETE_ALL_SMS, 60000); // 1 минуту ждет
-  }
-  sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
-}
-
-/**
- * @brief Обработчик параметров чтения SMS-сообщения (CMGR).
- */
-static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
-  if (!params || params->paramCount < 4) {
-    ESP_LOGE(TAG, SIM900D_RESP_CMGR " invalid params %d", params ? params->paramCount : 0);
-    return;
-  }
-  for (int i = 0; i < params->paramCount; ++i) {
-    ESP_LOGV(TAG, "CMGR param[%d]: %s", i, params->params[i]);
-  }
-  ESP_LOGV(TAG, "sms text %s", params->multilineBody);
-
-  sms_message_t sms = {0};
-  strncpy(sms.status, params->params[0], sizeof(sms.status) - 1);
-  strncpy(sms.sender, params->params[1], sizeof(sms.sender) - 1);
-  strncpy(sms.timestamp, params->params[3], sizeof(sms.timestamp) - 1);
-  strncpy(sms.text, params->multilineBody, sizeof(sms.text) - 1);
-  if (handle.last_sms_index != SIM900D_NO_INDEX_MEM) {
-    sms.index = handle.last_sms_index;
-  }
-  if (handle.sms_queue) {
-    xQueueSend(handle.sms_queue, &sms, 0);
-    handle.last_sms_index = SIM900D_NO_INDEX_MEM;
-  }
-}
-
-/**
- * @brief Обработчик параметров получения нового SMS (CMTI).
- */
-static void sim900d_cmti_handler(Sim900dParsedParams *params) {
-  if (!params || params->paramCount < 2) {
-    ESP_LOGE(TAG, SIM900D_RESP_CMTI " invalid params");
-    return;
-  }
-  const char *mem = params->params[0];
-  int index = atoi(params->params[1]);
-  ESP_LOGI(TAG, "New SMS indication: mem=%s, index=%d", mem, index);
-  handle.last_sms_index = index;
-  char cmd[32];
-  snprintf(cmd, sizeof(cmd), SIM900D_CMD_READ_SMS_FMT, index);
-  sim900d_send_at(cmd, NULL, 0, pdMS_TO_TICKS(SIM900D_UART_TX_WAIT_MS));
-}
-
-/**
- * @brief Обработчик параметров уведомлений о новых SMS (CNMI).
- */
-static void sim900d_cnmi_test_handler(Sim900dParsedParams *params) {
-  if (!params || params->paramCount < SIM900D_CNMI_PARAM_MAX) {
-    ESP_LOGE(TAG, SIM900D_RESP_CNMI_TEST " invalid params");
-    return;
-  }
-  ESP_LOGI(TAG, "CNMI response:");
-  bool error = false;
-  for (int i = 0; i < params->paramCount; ++i) {
-    int count = 0;
-    int *numbers = sim900d_parse_number_list(params->params[i], &count);
-    if (numbers && count > 0) {
-      switch (i) {
-      case SIM900D_CNMI_PARAM_MODE:
-        if (!sim900d_int_array_contains(numbers, count, SIM900D_CNMI_MODE_BUFFER_URC)) {
-          ESP_LOGE(TAG, "    MODE not support %d", SIM900D_CNMI_MODE_BUFFER_URC);
-          error = true;
-        }
-        break;
-      case SIM900D_CNMI_PARAM_MT:
-        if (!sim900d_int_array_contains(numbers, count, SIM900D_CNMI_MT_URC)) {
-          ESP_LOGE(TAG, "    MT not support %d", SIM900D_CNMI_MT_URC);
-          error = true;
-        }
-        break;
-      case SIM900D_CNMI_PARAM_BM:
-        if (!sim900d_int_array_contains(numbers, count, SIM900D_CNMI_BM_DISABLE)) {
-          ESP_LOGE(TAG, "    BM not support %d", SIM900D_CNMI_BM_DISABLE);
-          error = true;
-        }
-        break;
-      case SIM900D_CNMI_PARAM_DS:
-        if (!sim900d_int_array_contains(numbers, count, SIM900D_CNMI_DS_DISABLE)) {
-          ESP_LOGE(TAG, "    DS not support %d", SIM900D_CNMI_DS_DISABLE);
-          error = true;
-        }
-        break;
-      case SIM900D_CNMI_PARAM_BFR:
-        if (!sim900d_int_array_contains(numbers, count, SIM900D_CNMI_BFR_DISABLE)) {
-          ESP_LOGE(TAG, "    BFR not support %d", SIM900D_CNMI_BFR_DISABLE);
-          error = true;
-        }
-        break;
-      default:
-        break;
-      }
-    } else {
-      ESP_LOGE(TAG, "    param[%d]: failed to parse or empty", i);
-      error = true;
-    }
-    free(numbers);
-  }
-  if (!error) {
-    sim900d_send_at(SIM900D_CMD_SMS_NOTIFY, NULL, 0, pdMS_TO_TICKS(500));
-  } else {
-    ESP_LOGE(TAG, "notifications will not be received!");
-    // TODO: Добавить тут создание задачи периодической проверки смс
-  }
-}
-
-/**
- * Обработчик параметров состояния PIN-кода SIM-карты (CPIN).
- */
-static void sim900d_cpin_handler(Sim900dParsedParams *params) {
-  if (!params || params->paramCount < 1) {
-    ESP_LOGE(TAG, SIM900D_RESP_CPIN " invalid params");
-    return;
-  }
-  const char *cpin_state = params->params[0];
-
-  if (strcmp(cpin_state, SIM900D_RESP_READY) == 0) {
-    ESP_LOGI(TAG, "SIM card is ready");
-    sim900d_send_at(SIM900D_CMD_CPMS, NULL, 0, pdMS_TO_TICKS(500));
-  } else if (strcmp(cpin_state, "SIM PIN") == 0) {
-    ESP_LOGW(TAG, "SIM card requires PIN");
-  } else if (strcmp(cpin_state, "SIM PUK") == 0) {
-    ESP_LOGW(TAG, "SIM card requires PUK");
-  } else {
-    ESP_LOGW(TAG, "SIM card state: %s", cpin_state);
-  }
-}
-
-/**
- * @brief Обработчик параметров регистрации в сети (CREG).
- */
-static void sim900d_creg_handler(Sim900dParsedParams *params) {
-  static bool network_state = false;
-  if (!params || params->paramCount < 2) {
-    ESP_LOGE(TAG, SIM900D_RESP_CREG " invalid params");
-    return;
-  }
-  int n = atoi(params->params[0]);
-  int stat = atoi(params->params[1]);
-  ESP_LOGI(TAG, "CREG: n=%d, stat=%d", n, stat);
-  switch (stat) {
-  case 0:
-    ESP_LOGW(TAG, "Not registered, not searching for operator");
-    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
-    break;
-  case 1:
-    ESP_LOGI(TAG, "Registered, home network");
-    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
-    sim900d_send_at(SIM900D_RESP_CNMI_TEST, NULL, 0, pdMS_TO_TICKS(500));
-    break;
-  case 2:
-    ESP_LOGI(TAG, "Not registered, searching for operator");
-    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
-    // Продолжаем ожидание регистрации
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    sim900d_send_at(SIM900D_CMD_CREG, NULL, 0, pdMS_TO_TICKS(500));
-    break;
-  case 3:
-    ESP_LOGW(TAG, "Registration denied");
-    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
-    break;
-  case 4:
-    ESP_LOGW(TAG, "Unknown registration status");
-    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
-    break;
-  case 5:
-    ESP_LOGI(TAG, "Registered, roaming");
-    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
-    break;
-  default:
-    ESP_LOGW(TAG, "Unknown stat value: %d", stat);
-    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_NET_REGISTERED);
-    break;
-  }
-  bool net_registered = (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_NET_REGISTERED) != 0;
-  if (net_registered != network_state) {
-    network_state = net_registered;
-    if (handle.network_status_cb) {
-      handle.network_status_cb(network_state);
-    }
-  }
-}
-
-static void sim900d_register_hndlers() {
-  bool ok = true;
-  ok &= sim900d_register_handler(SIM900D_RESP_CPIN, sim900d_cpin_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_CREG, sim900d_creg_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_SMS_NOTIFY, sim900d_cnmi_test_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_CPMS, sim900d_cpms_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_CMGR, sim900d_cmgr_handler) == ESP_OK;
-  ok &= sim900d_register_handler(SIM900D_RESP_CMTI, sim900d_cmti_handler) == ESP_OK;
-
-  if (!ok) {
-    ESP_LOGE(TAG, "Failed to register SIM900D response handlers");
-  }
-}
-
-/****************************
- * END HANDLERS
- **************************** */
-
-void sim900d_service_start() {
-  // Зпускается последовательность вызовов обработчиков
-  sim900d_send_at(SIM900D_CMD_CPIN, NULL, 0, pdMS_TO_TICKS(500));
 }
 
 static void sim900d_uart_read_task(void *pvParameters) {
@@ -373,6 +104,36 @@ static void sim900d_uart_read_task(void *pvParameters) {
       vTaskDelay(pdMS_TO_TICKS(10));
     }
     // Если бит снят, снова ждём разрешения
+  }
+}
+
+/******************************************************
+ * Служебные функции
+ ****************************************************** */
+
+bool sim900d_enqueue_lowprio_cmd(const char *cmd, TickType_t timeout) {
+  if (!handle.lowprio_cmd_queue || !cmd)
+    return false;
+  sim900d_lowprio_cmd_t msg = {0};
+  strncpy(msg.cmd, cmd, SIM900D_LOWPRIO_CMD_MAX_LEN - 1);
+  msg.timeout = timeout;
+  return xQueueSend(handle.lowprio_cmd_queue, &msg, 0) == pdTRUE;
+}
+
+EventGroupHandle_t sim900d_get_event_group(void) { return handle.uart_event_group; }
+
+void sim900d_service_start() {
+  char format_cmd[32];
+  sim900d_sms_mode_t sms_format = SMS_MODE_PDU;
+  snprintf(format_cmd, sizeof(format_cmd), SIM900D_CMD_CMGF_MODE, sms_format == SMS_MODE_PDU ? 0 : 1);
+  char response_buffer[64];
+  int len = sim900d_send_at(format_cmd, response_buffer, sizeof(response_buffer), pdMS_TO_TICKS(500));
+  if (len >= 0 && strstr(response_buffer, "OK") != NULL) {
+    // Зпускается последовательность вызовов обработчиков
+    ESP_LOGI(TAG, "SIM900D->UART:SMS mode set to %s", sms_format == SMS_MODE_PDU ? "PDU" : "TEXT");
+    sim900d_send_at(SIM900D_CMD_CPIN, NULL, 0, pdMS_TO_TICKS(500));
+  } else {
+    ESP_LOGE(TAG, "set sms mode fail %s", response_buffer);
   }
 }
 
@@ -465,6 +226,31 @@ bool sim900d_reset(uint32_t timeout_ms) {
   }
 }
 
+/**
+ * @brief Задача обработки низкоприоритетных команд для SIM900D.
+ *
+ * Эта задача ожидает поступления команд в очередь sim900d_lowprio_cmd_queue.
+ * После получения команды задача проверяет, не занят ли драйвер UART (ожидает освобождения, если занят).
+ * Затем отправляет AT-команду модулю SIM900D с помощью функции sim900d_send_at.
+ *
+ * @param pvParameters Не используется (может быть NULL).
+ */
+static void sim900d_lowprio_cmd_task(void *pvParameters) {
+  sim900d_lowprio_cmd_t cmd_msg;
+  while (1) {
+    if (xQueueReceive(handle.lowprio_cmd_queue, &cmd_msg, portMAX_DELAY) == pdTRUE) {
+      // Ждём, пока драйвер не занят
+      while (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_BUSY) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+      sim900d_send_at(cmd_msg.cmd, NULL, 0, cmd_msg.timeout);
+    }
+  }
+}
+
+/******************************************************
+ * Функции приема/передачи сообщений
+ ****************************************************** */
 static void sim900d_sms_task(void *pvParameters) {
   sms_message_t sms;
 
@@ -484,26 +270,24 @@ static void sim900d_sms_task(void *pvParameters) {
 
 void sim900d_sms_set_callback(sms_callback_t cb) { handle.sms_cb = cb; }
 
+// Только для использования внтури драйвера!
+void sim900d_enqueue_sms(const sms_message_t *sms) {
+  if (handle.sms_queue && sms)
+    xQueueSend(handle.sms_queue, sms, 0);
+}
+
+/******************************************************
+ * Функции мониторинга состояния сети
+ ****************************************************** */
+
 void sim900d_network_status_set_callback(network_status_callback_t cb) { handle.network_status_cb = cb; }
 
-/**
- * @brief Задача обработки низкоприоритетных команд для SIM900D.
- *
- * Эта задача ожидает поступления команд в очередь sim900d_lowprio_cmd_queue.
- * После получения команды задача проверяет, не занят ли драйвер UART (ожидает освобождения, если занят).
- * Затем отправляет AT-команду модулю SIM900D с помощью функции sim900d_send_at.
- *
- * @param pvParameters Не используется (может быть NULL).
- */
-static void sim900d_lowprio_cmd_task(void *pvParameters) {
-  sim900d_lowprio_cmd_t cmd_msg;
-  while (1) {
-    if (xQueueReceive(handle.lowprio_cmd_queue, &cmd_msg, portMAX_DELAY) == pdTRUE) {
-      // Ждём, пока драйвер не занят
-      while (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_BUSY) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-      }
-      sim900d_send_at(cmd_msg.cmd, NULL, 0, cmd_msg.timeout);
+void sim900d_notify_network_status(bool registered) {
+  static bool last_state = false;
+  if (last_state != registered) {
+    last_state = registered;
+    if (handle.network_status_cb) {
+      handle.network_status_cb(registered);
     }
   }
 }
@@ -544,6 +328,9 @@ void sim900d_network_monitor_start(uint32_t period_ms) {
   }
 }
 
+/******************************************************
+ * Инициализация драйвера
+ ****************************************************** */
 static void sim900d_uart_cleanup(uart_port_t uart_num) {
   sim900d_network_monitor_stop();
   if (handle.sms_queue) {
@@ -573,7 +360,6 @@ static void sim900d_uart_cleanup(uart_port_t uart_num) {
   handle.network_task_handle = NULL;
   handle.sms_cb = NULL;
   handle.network_status_cb = NULL;
-  handle.last_sms_index = SIM900D_NO_INDEX_MEM;
   if (handle.uart_num != UART_NUM_MAX) {
     uart_driver_delete(uart_num);
     handle.uart_num = UART_NUM_MAX;
@@ -600,7 +386,6 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
   handle.ri_gpio = ri_pin;
   handle.uart_task_handle = NULL;
   handle.sms_task_handle = NULL;
-  handle.last_sms_index = SIM900D_NO_INDEX_MEM;
 
   if ((!handle.sms_queue) || (!handle.lowprio_cmd_queue)) {
     sim900d_uart_cleanup(uart_num);
@@ -630,7 +415,7 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
     sim900d_uart_cleanup(uart_num);
     return ESP_ERR_NO_MEM;
   }
-  sim900d_register_hndlers();
+  sim900d_register_handlers();
 
   // Создаём группу событий для управления
   handle.uart_event_group = xEventGroupCreate();

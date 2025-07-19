@@ -14,7 +14,7 @@
 #include "esp_log.h"
 
 #include "console.h"
-#include "sim900d/sim900d_uart.h"
+#include "sim900d/include/sim900d_uart.h"
 
 #define SIM900D_UART_NUM UART_NUM_1
 #define SIM900D_UART_TX GPIO_NUM_17
