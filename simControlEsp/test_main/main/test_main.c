@@ -1,14 +1,14 @@
 #include "unity.h"
 
-void test_sim900d_parser(void){
-    TEST_ASSERT_EQUAL(1, 1);
+void test_exclusive_uart_access(void);
 
-} // Группируй тесты по функциям
-
+void test_sim900d_uart(void){
+    test_exclusive_uart_access();
+}
 
 void app_main(void) {
     UNITY_BEGIN();
-    RUN_TEST(test_sim900d_parser); // или вызов отдельных RUN_TEST(...)
+    RUN_TEST(test_sim900d_uart); // или вызов отдельных RUN_TEST(...)
     UNITY_END();
 }
 
