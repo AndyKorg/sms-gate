@@ -82,6 +82,56 @@ typedef enum {
     SIM900D_CNMI_BFR_ENABLE = 1   /**< Выводить сообщения из буфера при включении. */
 } sim900d_cnmi_bfr_t;
 
+/**
+ * @brief Перечисление режимов удаления SMS для команды AT+CMGDA в PDU-режиме.
+ *
+ * Используется для указания типа сообщений, которые будут удалены командой AT+CMGDA в PDU-режиме.
+ */
+typedef enum {
+    SIM900D_CMGDA_PDU_DEL_READ = 1,     /**< Удалить только прочитанные сообщения ("DEL READ") */
+    SIM900D_CMGDA_PDU_DEL_UNREAD,       /**< Удалить только непрочитанные сообщения ("DEL UNREAD") */
+    SIM900D_CMGDA_PDU_DEL_SENT,         /**< Удалить только отправленные сообщения ("DEL SENT") */
+    SIM900D_CMGDA_PDU_DEL_UNSENT,       /**< Удалить только неотправленные сообщения ("DEL UNSENT") */
+    SIM900D_CMGDA_PDU_DEL_INBOX,        /**< Удалить только входящие сообщения ("DEL INBOX") */
+    SIM900D_CMGDA_PDU_DEL_ALL,          /**< Удалить все сообщения ("DEL ALL") */
+    SIM900D_CMGDA_PDU_DEL_MAX,
+} sim900d_cmgda_pdu_mode_t;
+
+/**
+ * @brief Массив строковых представлений режимов удаления SMS для команды AT+CMGDA в текстовом режиме.
+ *
+ * Индексы соответствуют значениям sim900d_cmgda_pdu_mode_t.
+ */
+static const char *const sim900d_cmgda_text_modes[] = {
+    "DEL READ",
+    "DEL UNREAD",
+    "DEL SENT",
+    "DEL UNSENT",
+    "DEL INBOX"
+    "DEL ALL",
+};
+
+/**
+ * @brief Структура для сопоставления режима удаления SMS (PDU) и его строкового представления (текстовый режим).
+ */
+typedef struct {
+    sim900d_cmgda_pdu_mode_t pdu_mode;
+    const char *text_mode;
+} sim900d_cmgda_mode_pair_t;
+
+/**
+ * @brief Массив пар режимов удаления SMS: PDU-значение и строковое представление.
+ *      сортировка массива в соответствии с sim900d_cmgda_pdu_mode_t
+ */
+static const sim900d_cmgda_mode_pair_t sim900d_cmgda_mode_pairs[] = {
+    { SIM900D_CMGDA_PDU_DEL_READ,   "DEL READ"   },
+    { SIM900D_CMGDA_PDU_DEL_UNREAD, "DEL UNREAD" },
+    { SIM900D_CMGDA_PDU_DEL_SENT,   "DEL SENT"   },
+    { SIM900D_CMGDA_PDU_DEL_UNSENT, "DEL UNSENT" },
+    { SIM900D_CMGDA_PDU_DEL_INBOX,  "DEL INBOX"  },
+    { SIM900D_CMGDA_PDU_DEL_ALL,    "DEL ALL"    },
+};
+
 /***********************************************
             Команды и ответы
 ***********************************************/
@@ -226,40 +276,10 @@ typedef enum {
 #define SIM900D_RESP_CPMS "+" SIM900D_CPMS ":"
 
 /**
- * @brief Команда для удаления всех SMS из памяти (AT+CMGDA="DEL ALL").
- * @details Удаляет все SMS-сообщения из памяти модуля.
+ * @brief Команда для удаления SMS из памяти (AT+CMGDA=).
+ * @details Удаляет SMS-сообщения из памяти модуля в соответствии с режимом удаления
  */
-#define SIM900D_CMD_DELETE_ALL_SMS    SIM900D_AT "+" SIM900D_CMGDA "=\"DEL ALL\"\r\n"
-
-/**
- * @brief Команда для удаления всех прочитанных SMS (AT+CMGDA="DEL READ").
- * @details Удаляет только прочитанные сообщения.
- */
-#define SIM900D_CMD_DELETE_READ_SMS   SIM900D_AT "+" SIM900D_CMGDA "=\"DEL READ\"\r\n"
-
-/**
- * @brief Команда для удаления всех непрочитанных SMS (AT+CMGDA="DEL UNREAD").
- * @details Удаляет только непрочитанные сообщения.
- */
-#define SIM900D_CMD_DELETE_UNREAD_SMS SIM900D_AT "+" SIM900D_CMGDA "=\"DEL UNREAD\"\r\n"
-
-/**
- * @brief Команда для удаления всех отправленных SMS (AT+CMGDA="DEL SENT").
- * @details Удаляет только отправленные сообщения.
- */
-#define SIM900D_CMD_DELETE_SENT_SMS   SIM900D_AT "+" SIM900D_CMGDA "=\"DEL SENT\"\r\n"
-
-/**
- * @brief Команда для удаления всех неотправленных SMS (AT+CMGDA="DEL UNSENT").
- * @details Удаляет только неотправленные сообщения.
- */
-#define SIM900D_CMD_DELETE_UNSENT_SMS SIM900D_AT "+" SIM900D_CMGDA "=\"DEL UNSENT\"\r\n"
-
-/**
- * @brief Команда для удаления всех входящих SMS (AT+CMGDA="DEL INBOX").
- * @details Удаляет только входящие сообщения.
- */
-#define SIM900D_CMD_DELETE_INBOX_SMS  SIM900D_AT "+" SIM900D_CMGDA "=\"DEL INBOX\"\r\n"
+#define SIM900D_CMD_DELETE_SMS    SIM900D_AT "+" SIM900D_CMGDA "="
 
 /**
  * @brief Форматированная команда для удаления SMS по индексу (AT+CMGD=%d).

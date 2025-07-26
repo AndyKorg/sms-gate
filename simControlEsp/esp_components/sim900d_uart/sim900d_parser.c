@@ -297,6 +297,9 @@ int *sim900d_parse_number_list(const char *str, int *outCount) {
 
 // Обработка завершения многострочного ответа (OK/ERROR)
 static void sim900d_finish_multiline_response() {
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Finish multiline");
+#endif
   size_t len = strlen(multilineBuffer);
   while (len > 0 && (multilineBuffer[len - 1] == '\n' || multilineBuffer[len - 1] == '\r'))
     multilineBuffer[--len] = '\0';
@@ -344,6 +347,9 @@ static void sim900d_finish_multiline_response() {
 
 // Обработка строки в режиме аккумулирования многострочного ответа
 static bool sim900d_accumulate_multiline(const char *str) {
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Accumulate multiline");
+#endif
   char cleaned[64];
   trim_whitespace(cleaned, str);
   if (strcmp(cleaned, SIM900D_RESP_OK) == 0 || strcmp(cleaned, SIM900D_RESP_ERROR) == 0) {
@@ -363,6 +369,9 @@ static bool sim900d_accumulate_multiline(const char *str) {
 
 // Обработка начала многострочного ответа (+CMGR/+CMGL)
 static void sim900d_start_multiline_response(const char *prefix, const char *p, int foundIndex, char **saveptr) {
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "Start multiline");
+#endif
   currentState = STATE_ACCUMULATING_MULTILINE;
   multilineBuffer[0] = '\0';
   currentHandler = handlerTable[foundIndex];
@@ -518,9 +527,30 @@ esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
   return ESP_ERR_NO_MEM;
 }
 
-esp_err_t sim900d_set_sms_mode(sim900d_sms_mode_t mode) {
-  if (mode != SMS_MODE_TEXT && mode != SMS_MODE_PDU) {
-    return ESP_ERR_INVALID_ARG;
+
+/**
+ * @brief Устанавливает или получает режим SMS для SIM900D.
+ *
+ * Эта функция позволяет установить или получить текущий режим SMS (текстовый или PDU) 
+ * для модуля SIM900D. Доступ к режиму защищён мьютексом для обеспечения потокобезопасности.
+ *
+ * @param[out] mode     Указатель на переменную, в которую будет записан текущий режим SMS. 
+ *                      Может быть NULL, если получение режима не требуется.
+ * @param[in]  set_mode Режим SMS, который необходимо установить (используется только если set == true).
+ *                      Допустимые значения: SMS_MODE_TEXT или SMS_MODE_PDU.
+ * @param[in]  set      Если true — установить режим SMS в set_mode; если false — только получить текущий режим.
+ *
+ * @return
+ *      - ESP_OK:        Операция выполнена успешно.
+ *      - ESP_ERR_INVALID_ARG: Передан некорректный режим SMS для установки.
+ *      - ESP_ERR_NO_MEM: Не удалось создать мьютекс из-за нехватки памяти.
+ *      - ESP_FAIL:      Не удалось получить мьютекс.
+ */
+esp_err_t sim900d_sms_mode(sim900d_sms_mode_t *mode, sim900d_sms_mode_t set_mode, bool set) {
+  if (set) {
+    if (set_mode != SMS_MODE_TEXT && set_mode != SMS_MODE_PDU) {
+      return ESP_ERR_INVALID_ARG;
+    }
   }
   if (!sms_mode_mutex) {
     sms_mode_mutex = xSemaphoreCreateMutex();
@@ -529,7 +559,12 @@ esp_err_t sim900d_set_sms_mode(sim900d_sms_mode_t mode) {
     }
   }
   if (xSemaphoreTake(sms_mode_mutex, portMAX_DELAY) == pdTRUE) {
-    sms_mode = mode;
+    if (set) {
+      sms_mode = set_mode;
+    }
+    if (mode) {
+      *mode = sms_mode;
+    }
     xSemaphoreGive(sms_mode_mutex);
     return ESP_OK;
   }

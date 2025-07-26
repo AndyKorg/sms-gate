@@ -3,10 +3,8 @@
 #include "sim900d_parser.h"
 #include "sim900d_uart_internal.h"
 
-
 #include "esp_log.h"
 #include <string.h>
-
 
 static const char *TAG = "SIM900_HANDLER";
 
@@ -25,16 +23,29 @@ static void sim900d_cpms_handler(Sim900dParsedParams *params) {
 
   if ((used1 >= total1) || (used2 >= total2)) {
     ESP_LOGW(TAG, "SMS memory full, deleting all messages...");
-    sim900d_enqueue_lowprio_cmd(SIM900D_CMD_DELETE_ALL_SMS, pdMS_TO_TICKS(60000));
+    char del_cmd[64];
+    sim900d_sms_mode_t sms_format;
+    sim900d_sms_mode(&sms_format, sms_format, false);
+    if (sms_format == SMS_MODE_PDU) {
+      snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS"%d\r\n",
+               sim900d_cmgda_mode_pairs[SIM900D_CMGDA_PDU_DEL_ALL - 1].pdu_mode);
+    } else {
+      snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS "\"%s\"\r\n",
+               sim900d_cmgda_mode_pairs[SIM900D_CMGDA_PDU_DEL_ALL - 1].text_mode);
+    }
+    sim900d_enqueue_lowprio_cmd(del_cmd, pdMS_TO_TICKS(60000));
   }
 
   sim900d_enqueue_lowprio_cmd(SIM900D_CMD_CREG, pdMS_TO_TICKS(500));
 }
 
 static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
-  if (!params || params->paramCount < 4) {
+  if (!params) {
     ESP_LOGE(TAG, SIM900D_RESP_CMGR " invalid params");
     return;
+  }
+  for (int i = 0; i < params->paramCount; ++i) {
+    ESP_LOGV(TAG, "param[%d]: %s", i, params->params[i]);
   }
 
   sms_message_t sms = {0};

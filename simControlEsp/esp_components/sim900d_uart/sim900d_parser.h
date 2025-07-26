@@ -97,12 +97,24 @@ parse_state_t sim900d_parse_line(const char* line);
 int* sim900d_parse_number_list(const char* str, int* outCount);
 
 /**
- * @brief Устанавливает текущий режим SMS (текстовый или PDU).
+ * @brief Устанавливает или получает режим SMS для SIM900D.
  *
- * @param mode Режим SMS (SMS_MODE_TEXT или SMS_MODE_PDU)
- * @return ESP_OK при успешной установке, ESP_ERR_INVALID_ARG при ошибке аргументов
+ * Эта функция позволяет установить или получить текущий режим SMS (текстовый или PDU) 
+ * для модуля SIM900D. Доступ к режиму защищён мьютексом для обеспечения потокобезопасности.
+ *
+ * @param[out] mode     Указатель на переменную, в которую будет записан текущий режим SMS. 
+ *                      Может быть NULL, если получение режима не требуется.
+ * @param[in]  set_mode Режим SMS, который необходимо установить (используется только если set == true).
+ *                      Допустимые значения: SMS_MODE_TEXT или SMS_MODE_PDU.
+ * @param[in]  set      Если true — установить режим SMS в set_mode; если false — только получить текущий режим.
+ *
+ * @return
+ *      - ESP_OK:        Операция выполнена успешно.
+ *      - ESP_ERR_INVALID_ARG: Передан некорректный режим SMS для установки.
+ *      - ESP_ERR_NO_MEM: Не удалось создать мьютекс из-за нехватки памяти.
+ *      - ESP_FAIL:      Не удалось получить мьютекс.
  */
-esp_err_t sim900d_set_sms_mode(sim900d_sms_mode_t mode);
+esp_err_t sim900d_sms_mode(sim900d_sms_mode_t *mode, sim900d_sms_mode_t set_mode, bool set);
 
 /**
  * @brief Инициализация парсера SIM900D.

@@ -23,6 +23,7 @@ static const char *TAG = "SIM900";
 #include "sim900d_uart_internal.h"
 
 #define UART_BUF_SIZE 1024
+#define UART_DEFAULT_READ_TIMEOUT_MS  100
 
 typedef struct {
   uart_port_t uart_num;
@@ -63,13 +64,28 @@ typedef struct {
 // Только для использования внтури драйвера!
 int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_t timeout) {
   ESP_LOGV(TAG, "UART->SIM900D: %s", cmd);
+  while (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_BUSY) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+
   // Драйвер занят
-  xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
+  xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
+  ESP_LOGV(TAG, "send_at:Busy set");
+  bool white_responce = (response && (resp_size > 1));
+  if (white_responce){
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
+    //Ожидание гарантированого завершения предыдущего чтения
+    vTaskDelay(pdMS_TO_TICKS(UART_DEFAULT_READ_TIMEOUT_MS*2));
+    ESP_LOGV(TAG, "Read enable clear");
+  }
   uart_write_bytes(handle.uart_num, cmd, strlen(cmd));
   uart_write_bytes(handle.uart_num, "\r\n", 2);
 
-  if (response && (resp_size > 1)) {
+  if (white_responce) {
     int len = uart_read_bytes(handle.uart_num, (uint8_t *)response, resp_size - 1, timeout);
+    xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
+    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
+    ESP_LOGV(TAG, "send_at: Read enable set, busy clear");
     if (len > 0) {
       response[len] = 0;
       // Логируем полученный ответ
@@ -91,16 +107,17 @@ static void sim900d_uart_read_task(void *pvParameters) {
     // Ждём, пока установлен бит разрешения чтения
     xEventGroupWaitBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE, pdFALSE, pdTRUE, portMAX_DELAY);
     while (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_READ_ENABLE) {
-      int len = uart_read_bytes(handle.uart_num, buf, UART_BUF_SIZE, pdMS_TO_TICKS(100));
+      int len = uart_read_bytes(handle.uart_num, buf, UART_BUF_SIZE, pdMS_TO_TICKS(UART_DEFAULT_READ_TIMEOUT_MS));
       if (len > 0) {
         buf[len] = 0;
         ESP_LOGV(TAG, "SIM900D->UART:%s", buf);
         if (sim900d_parse_line((char *)buf) == PARSE_STATE_IN_PROGRESS) {
           xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
+          ESP_LOGV(TAG, "uart_read: Busy set");
         } else {
           xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
+          ESP_LOGV(TAG, "uart_read: Busy clear");
         }
-        ESP_LOGV(TAG, "Busy:%d", xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_BUSY ? 1 : 0);
       }
       vTaskDelay(pdMS_TO_TICKS(10));
     }
@@ -126,11 +143,12 @@ EventGroupHandle_t sim900d_get_event_group(void) { return handle.uart_event_grou
 void sim900d_service_start() {
   char format_cmd[32];
   sim900d_sms_mode_t sms_format = SMS_MODE_PDU;
+  sim900d_sms_mode(NULL, sms_format, true);
   snprintf(format_cmd, sizeof(format_cmd), SIM900D_CMD_CMGF_MODE, sms_format == SMS_MODE_PDU ? 0 : 1);
   char response_buffer[64];
   int len = sim900d_send_at(format_cmd, response_buffer, sizeof(response_buffer), pdMS_TO_TICKS(500));
   if (len >= 0 && strstr(response_buffer, "OK") != NULL) {
-    // Зпускается последовательность вызовов обработчиков
+    // Зпускается последовательность вызовов обработчиков, см. sim900d_handlers.c
     ESP_LOGI(TAG, "SIM900D->UART:SMS mode set to %s", sms_format == SMS_MODE_PDU ? "PDU" : "TEXT");
     sim900d_send_at(SIM900D_CMD_CPIN, NULL, 0, pdMS_TO_TICKS(500));
   } else {
@@ -148,7 +166,6 @@ int sim900d_uart_autobaud(uint32_t timeout_ms) {
   // Снимаем бит разрешения чтения UART (запретить чтение) и драйвер занят
   if (handle.uart_event_group) {
     xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
-    xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
   }
 
   int result = -1;
@@ -170,6 +187,7 @@ int sim900d_uart_autobaud(uint32_t timeout_ms) {
   if (handle.uart_event_group) {
     xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
     xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
+    ESP_LOGV(TAG, "Busy clear");
   }
 
   if (result < 0) {
