@@ -1,14 +1,9 @@
 #include "unity.h"
 
-void test_sim900d_parser(void){
-    TEST_ASSERT_EQUAL(1, 1);
-
-} // Группируй тесты по функциям
-
-
 void app_main(void) {
     UNITY_BEGIN();
-    RUN_TEST(test_sim900d_parser); // или вызов отдельных RUN_TEST(...)
+    // Запускаем тест по имени
+    unity_run_test_by_name("PDU Parser Test");
     UNITY_END();
 }
 
