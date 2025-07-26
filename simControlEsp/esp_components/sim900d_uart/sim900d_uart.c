@@ -16,10 +16,10 @@
 
 static const char *TAG = "SIM900";
 
-#include "sim900d_uart.h"
 #include "sim900d_command.h"
 #include "sim900d_handlers.h"
 #include "sim900d_parser.h"
+#include "sim900d_uart.h"
 #include "sim900d_uart_internal.h"
 
 #define UART_BUF_SIZE 1024
@@ -38,6 +38,7 @@ typedef struct {
   gpio_num_t status_gpio;
   gpio_num_t ri_gpio;                  // Может быть неопределен
   EventGroupHandle_t uart_event_group; // Состояние драйвера
+  SemaphoreHandle_t busy_mutex;
 } sim900d_uart_handle_t;
 
 static sim900d_uart_handle_t handle = {.uart_num = UART_NUM_MAX};
@@ -63,6 +64,12 @@ typedef struct {
 // Только для использования внтури драйвера!
 int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_t timeout) {
   ESP_LOGV(TAG, "UART->SIM900D: %s", cmd);
+
+  if (!xSemaphoreTake(handle.busy_mutex, timeout * 100)) {
+    ESP_LOGW(TAG, "SIM900D send timeout: busy");
+    return 0;
+  }
+
   // Драйвер занят
   xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
   uart_write_bytes(handle.uart_num, cmd, strlen(cmd));
@@ -74,13 +81,14 @@ int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_
       response[len] = 0;
       // Логируем полученный ответ
       ESP_LOGV(TAG, "SIM900D->UART: %s", response);
+      xSemaphoreGive(handle.busy_mutex);
       return len;
     }
 
     response[0] = 0;
     ESP_LOGV(TAG, "SIM900D->UART: <no response>");
   }
-
+  xSemaphoreGive(handle.busy_mutex);
   return 0;
 }
 
@@ -91,6 +99,11 @@ static void sim900d_uart_read_task(void *pvParameters) {
     // Ждём, пока установлен бит разрешения чтения
     xEventGroupWaitBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE, pdFALSE, pdTRUE, portMAX_DELAY);
     while (xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_READ_ENABLE) {
+      if (!xSemaphoreTake(handle.busy_mutex, portMAX_DELAY)) {
+        ESP_LOGW(TAG, "busy_mutex fatal error");
+        return;
+      }
+
       int len = uart_read_bytes(handle.uart_num, buf, UART_BUF_SIZE, pdMS_TO_TICKS(100));
       if (len > 0) {
         buf[len] = 0;
@@ -102,6 +115,7 @@ static void sim900d_uart_read_task(void *pvParameters) {
         }
         ESP_LOGV(TAG, "Busy:%d", xEventGroupGetBits(handle.uart_event_group) & SIM900D_UART_EVENT_BUSY ? 1 : 0);
       }
+      xSemaphoreGive(handle.busy_mutex);
       vTaskDelay(pdMS_TO_TICKS(10));
     }
     // Если бит снят, снова ждём разрешения
@@ -365,6 +379,10 @@ static void sim900d_uart_cleanup(uart_port_t uart_num) {
     uart_driver_delete(uart_num);
     handle.uart_num = UART_NUM_MAX;
   }
+  if (handle.busy_mutex != NULL) {
+    vSemaphoreDelete(handle.busy_mutex);
+    handle.busy_mutex = NULL;
+  }
 }
 
 esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_config, gpio_num_t txd_pin,
@@ -421,6 +439,11 @@ esp_err_t sim900d_uart_init(uart_port_t uart_num, const uart_config_t *uart_conf
   // Создаём группу событий для управления
   handle.uart_event_group = xEventGroupCreate();
   if (!handle.uart_event_group) {
+    sim900d_uart_cleanup(uart_num);
+    return ESP_ERR_NO_MEM;
+  }
+  handle.busy_mutex = xSemaphoreCreateMutex();
+  if (handle.busy_mutex == NULL) {
     sim900d_uart_cleanup(uart_num);
     return ESP_ERR_NO_MEM;
   }
