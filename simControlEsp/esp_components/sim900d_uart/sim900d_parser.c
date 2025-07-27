@@ -1,9 +1,10 @@
+#include "sim900d_parser.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sim900d_command.h"
-#include "sim900d_parser.h"
 #include "sim900d_pdu.h"
+
 
 #define SIM900D_VERBOSE
 #ifdef SIM900D_VERBOSE
@@ -36,17 +37,26 @@ typedef struct {
   Sim900dParsedParams params;
 } sim900d_handler_task_msg_t;
 
+typedef sim900d_handler_task_msg_t *sim900d_handler_task_msg_ptr_t;
+
 static QueueHandle_t sim900d_handler_queue = NULL;
 
 static sim900d_sms_mode_t sms_mode = SMS_MODE_TEXT;
 static SemaphoreHandle_t sms_mode_mutex = NULL;
 
+// Добавляем статический указатель для многоразового сообщения
+static sim900d_handler_task_msg_ptr_t reusable_msg = NULL;
+
 static void sim900d_handler_task(void *pvParameters) {
-  sim900d_handler_task_msg_t msg;
+  sim900d_handler_task_msg_ptr_t msg_ptr;
   while (1) {
-    if (xQueueReceive(sim900d_handler_queue, &msg, portMAX_DELAY) == pdTRUE) {
-      if (msg.handler) {
-        msg.handler(&msg.params);
+    if (xQueueReceive(sim900d_handler_queue, &msg_ptr, portMAX_DELAY) == pdTRUE) {
+      if (msg_ptr && msg_ptr->handler) {
+        msg_ptr->handler(&msg_ptr->params);
+      }
+      // Если это не наше многоразовое сообщение, освободить его
+      if (msg_ptr != reusable_msg) {
+        free(msg_ptr);
       }
     }
   }
@@ -298,7 +308,7 @@ int *sim900d_parse_number_list(const char *str, int *outCount) {
 // Обработка завершения многострочного ответа (OK/ERROR)
 static void sim900d_finish_multiline_response() {
 #ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Finish multiline");
+  ESP_LOGV(TAG, "Finish multiline");
 #endif
   size_t len = strlen(multilineBuffer);
   while (len > 0 && (multilineBuffer[len - 1] == '\n' || multilineBuffer[len - 1] == '\r'))
@@ -348,7 +358,7 @@ static void sim900d_finish_multiline_response() {
 // Обработка строки в режиме аккумулирования многострочного ответа
 static bool sim900d_accumulate_multiline(const char *str) {
 #ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Accumulate multiline");
+  ESP_LOGV(TAG, "Accumulate multiline");
 #endif
   char cleaned[64];
   trim_whitespace(cleaned, str);
@@ -370,7 +380,7 @@ static bool sim900d_accumulate_multiline(const char *str) {
 // Обработка начала многострочного ответа (+CMGR/+CMGL)
 static void sim900d_start_multiline_response(const char *prefix, const char *p, int foundIndex, char **saveptr) {
 #ifdef SIM900D_VERBOSE
-    ESP_LOGV(TAG, "Start multiline");
+  ESP_LOGV(TAG, "Start multiline");
 #endif
   currentState = STATE_ACCUMULATING_MULTILINE;
   multilineBuffer[0] = '\0';
@@ -488,13 +498,30 @@ parse_state_t sim900d_parse_line(const char *line) {
     str = strtok_r(NULL, "\r\n", &saveptr);
   }
   if (currentState == STATE_IDLE) {
-    sim900d_handler_task_msg_t msg = {0};
-    msg.handler = handlerTable[foundIndex];
-    msg.params = currentParams;
+    sim900d_handler_task_msg_ptr_t msg_ptr;
+
+    if (reusable_msg && xQueueIsQueueEmptyFromISR(sim900d_handler_queue)) {
+      msg_ptr = reusable_msg;
+    } else {
+      msg_ptr = (sim900d_handler_task_msg_ptr_t)malloc(sizeof(sim900d_handler_task_msg_t));
+      if (!msg_ptr) {
+        ESP_LOGE(TAG, "Failed to allocate handler message");
+        return PARSE_STATE_DONE;
+      }
+    }
+
+    msg_ptr->handler = handlerTable[foundIndex];
+    msg_ptr->params = currentParams;
+
     if (sim900d_handler_queue) {
-      xQueueSend(sim900d_handler_queue, &msg, 0);
+      if (xQueueSend(sim900d_handler_queue, &msg_ptr, 0) != pdTRUE) {
+        if (msg_ptr != reusable_msg) {
+          free(msg_ptr);
+        }
+      }
     }
   }
+
   return currentState == STATE_IDLE ? PARSE_STATE_DONE : PARSE_STATE_IN_PROGRESS;
 }
 
@@ -527,14 +554,13 @@ esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
   return ESP_ERR_NO_MEM;
 }
 
-
 /**
  * @brief Устанавливает или получает режим SMS для SIM900D.
  *
- * Эта функция позволяет установить или получить текущий режим SMS (текстовый или PDU) 
+ * Эта функция позволяет установить или получить текущий режим SMS (текстовый или PDU)
  * для модуля SIM900D. Доступ к режиму защищён мьютексом для обеспечения потокобезопасности.
  *
- * @param[out] mode     Указатель на переменную, в которую будет записан текущий режим SMS. 
+ * @param[out] mode     Указатель на переменную, в которую будет записан текущий режим SMS.
  *                      Может быть NULL, если получение режима не требуется.
  * @param[in]  set_mode Режим SMS, который необходимо установить (используется только если set == true).
  *                      Допустимые значения: SMS_MODE_TEXT или SMS_MODE_PDU.
@@ -584,21 +610,30 @@ esp_err_t sim900d_parser_init() {
     handlerPrefixes[i] = NULL;
   }
 
-  if (!sim900d_handler_queue) {
-    sim900d_handler_queue = xQueueCreate(SIM900D_HANDLER_QUEUE_LEN, sizeof(sim900d_handler_task_msg_t));
-    if (!sim900d_handler_queue) {
-#ifdef SIM900D_VERBOSE
-      ESP_LOGE(TAG, "Failed to create handler queue");
-#endif
+  if (!reusable_msg) {
+    reusable_msg = (sim900d_handler_task_msg_ptr_t)malloc(sizeof(sim900d_handler_task_msg_t));
+    if (!reusable_msg) {
+      ESP_LOGE(TAG, "Failed to allocate reusable message");
       return ESP_ERR_NO_MEM;
     }
+  }
+
+  if (!sim900d_handler_queue) {
+    sim900d_handler_queue = xQueueCreate(SIM900D_HANDLER_QUEUE_LEN, sizeof(sim900d_handler_task_msg_ptr_t));
+    if (!sim900d_handler_queue) {
+      free(reusable_msg);
+      reusable_msg = NULL;
+      ESP_LOGE(TAG, "Failed to create handler queue");
+      return ESP_ERR_NO_MEM;
+    }
+
     BaseType_t task_created = xTaskCreate(sim900d_handler_task, "sim900d_handler_task", 2048 * 2, NULL, 8, NULL);
     if (task_created != pdPASS) {
-#ifdef SIM900D_VERBOSE
-      ESP_LOGE(TAG, "Failed to create handler task");
-#endif
       vQueueDelete(sim900d_handler_queue);
       sim900d_handler_queue = NULL;
+      free(reusable_msg);
+      reusable_msg = NULL;
+      ESP_LOGE(TAG, "Failed to create handler task");
       return ESP_ERR_NO_MEM;
     }
   }
