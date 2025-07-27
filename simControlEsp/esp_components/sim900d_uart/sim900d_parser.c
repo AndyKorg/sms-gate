@@ -5,7 +5,6 @@
 #include "sim900d_command.h"
 #include "sim900d_pdu.h"
 
-
 #define SIM900D_VERBOSE
 #ifdef SIM900D_VERBOSE
 #undef LOG_LOCAL_LEVEL
@@ -317,6 +316,13 @@ static void sim900d_finish_multiline_response() {
   strncpy(currentParams.multilineBody, multilineBuffer, sizeof(currentParams.multilineBody) - 1);
   currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
 
+#ifdef SIM900D_VERBOSE
+  for (int idx = 0; idx < currentParams.paramCount; idx++) {
+    ESP_LOGV(TAG, "Param[%d]=%s", idx, currentParams.params[idx]);
+  }
+  ESP_LOGV(TAG, "Body %s", currentParams.multilineBody);
+#endif
+
   sim900d_sms_mode_t mode;
   if (sms_mode_mutex) {
     if (xSemaphoreTake(sms_mode_mutex, portMAX_DELAY) == pdTRUE) {
@@ -331,13 +337,34 @@ static void sim900d_finish_multiline_response() {
   currentParams.sms_mode = mode;
 
   if (mode == SMS_MODE_PDU) {
-    // PDU-режим
+    // 🔍 Диагностика PDU
+#ifdef SIM900D_VERBOSE
+    ESP_LOGI(TAG, "PDU mode detected");
+    ESP_LOGI(TAG, "Raw PDU string: %s", currentParams.multilineBody);
+#endif
+
     sim900d_pdu_decoded_t pdu;
-    if (sim900d_decode_pdu(currentParams.params[1], &pdu)) {
+    if (sim900d_decode_pdu(currentParams.multilineBody, &pdu)) {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGI(TAG, "Decoded PDU:");
+      ESP_LOGI(TAG, "  Sender:    %s", pdu.sender);
+      ESP_LOGI(TAG, "  Timestamp: %s", pdu.timestamp);
+      ESP_LOGI(TAG, "  Text:      %s", pdu.text);
+#endif
       strncpy(currentParams.params[0], pdu.sender, sizeof(currentParams.params[0]) - 1);
+      currentParams.params[0][sizeof(currentParams.params[0]) - 1] = '\0';
+
       strncpy(currentParams.params[1], pdu.timestamp, sizeof(currentParams.params[1]) - 1);
+      currentParams.params[1][sizeof(currentParams.params[1]) - 1] = '\0';
+
       strncpy(currentParams.multilineBody, pdu.text, sizeof(currentParams.multilineBody) - 1);
+      currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
+
       currentParams.paramCount = 3; // sender, timestamp, text
+    } else {
+#ifdef SIM900D_VERBOSE
+      ESP_LOGW(TAG, "PDU decode failed");
+#endif
     }
   } else if (is_valid_ucs2_hex(currentParams.multilineBody)) {
     char *utf8 = ucs2_hex_to_utf8(currentParams.multilineBody);
@@ -347,6 +374,7 @@ static void sim900d_finish_multiline_response() {
       free(utf8);
     }
   }
+
   if (currentHandler) {
     currentHandler(&currentParams);
   }
@@ -360,21 +388,45 @@ static bool sim900d_accumulate_multiline(const char *str) {
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Accumulate multiline");
 #endif
-  char cleaned[64];
+
+  // Кэшированный буфер для cleaned
+  static char *cleaned = NULL;
+  static size_t cleaned_capacity = 0;
+
+  size_t str_len = strlen(str);
+  if (cleaned_capacity < str_len + 1) {
+    char *new_buf = realloc(cleaned, str_len + 1); // +1 под '\0'
+    if (!new_buf) {
+      ESP_LOGE(TAG, "Failed to allocate memory for cleaned string");
+      return false;
+    }
+    cleaned = new_buf;
+    cleaned_capacity = str_len + 1;
+  }
+
   trim_whitespace(cleaned, str);
+
+  // Проверка на завершение ответа
   if (strcmp(cleaned, SIM900D_RESP_OK) == 0 || strcmp(cleaned, SIM900D_RESP_ERROR) == 0) {
     sim900d_finish_multiline_response();
     return true; // завершили аккумулирование
-  } else {
-    // Добавляем строку в буфер, если не переполнен
-    size_t mlen = strlen(multilineBuffer);
-    size_t slen = strlen(str);
-    if (mlen + slen + 2 < sizeof(multilineBuffer)) {
-      strcat(multilineBuffer, str);
-      strcat(multilineBuffer, "\n");
-    }
-    return false; // продолжаем аккумулирование
   }
+
+  // Добавление строки в multilineBuffer с защитой от переполнения
+  size_t mlen = strlen(multilineBuffer);
+  size_t buf_free = sizeof(multilineBuffer) - mlen - 1; // -1 для завершающего '\0'
+  size_t slen = strlen(str);
+
+  if (buf_free > 1) {
+    size_t copy_len = (slen < buf_free - 1) ? slen : (buf_free - 1); // -1 на '\n'
+    strncat(multilineBuffer, str, copy_len);
+    multilineBuffer[mlen + copy_len] = '\n';
+    multilineBuffer[mlen + copy_len + 1] = '\0';
+  } else {
+    ESP_LOGW(TAG, "Multiline buffer full, line ignored");
+  }
+
+  return false; // продолжаем аккумулирование
 }
 
 // Обработка начала многострочного ответа (+CMGR/+CMGL)
