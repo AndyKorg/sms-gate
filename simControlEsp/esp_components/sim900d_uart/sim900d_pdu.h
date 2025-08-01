@@ -7,13 +7,14 @@
 
 // Структура результата декодирования PDU
 typedef struct {
-    char sender[32];
-    char timestamp[32];
-    char text[512]; // UTF-8
-    bool is_concat;
-    uint8_t concat_ref;
-    uint8_t concat_total;
-    uint8_t concat_seq;
+  char smsc[32]; // Номер SMS центра
+  char sender[32];
+  char timestamp[32];
+  char text[512]; // UTF-8
+  bool is_concat;
+  uint8_t concat_ref; //уникальный идентификатор для группы частей. Уникален для отправителя
+  uint8_t concat_total; //общее количество частей
+  uint8_t concat_seq; //номер текущей части
 } sim900d_pdu_decoded_t;
 
 // Декодирование PDU-строки (hex) в структуру
