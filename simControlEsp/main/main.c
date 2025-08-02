@@ -13,8 +13,9 @@
 #define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
 #include "esp_log.h"
 
-#include "console.h"
 #include "..\esp_components\sim900d_uart\include\sim900d_uart.h"
+#include "console.h"
+
 
 #define SIM900D_UART_NUM UART_NUM_1
 #define SIM900D_UART_TX GPIO_NUM_17
@@ -27,13 +28,22 @@ static const char *TAG = "main";
 
 static esp_err_t sms_received_callback(const sms_message_t *sms) {
   printf("SMS received! Index: %d, From: %s, Text: %s\n", sms->index, sms->sender, sms->text);
+  if (sms->pdu_mode) {
+    printf("Многочастное: %s\n", sms->is_concat ? "Да" : "Нет");
+    if (sms->is_concat) {
+      printf("  Идентификатор группы: %d\n", sms->concat_ref);
+      printf("  Всего частей: %d\n", sms->concat_total);
+      printf("  Номер этой части: %d\n", sms->concat_seq);
+    }
+    printf("Центр сообщений: %s\n", sms->smsc[0] ? sms->smsc : "(пусто)");
+  }
   return ESP_OK;
 }
 
-static void network_status_callback(bool registered){
-    ESP_LOGV(TAG, "network status %d", registered);
-  if (registered){
-    sim900d_network_monitor_start(60*1000);
+static void network_status_callback(bool registered) {
+  ESP_LOGV(TAG, "network status %d", registered);
+  if (registered) {
+    sim900d_network_monitor_start(60 * 1000);
   }
 }
 

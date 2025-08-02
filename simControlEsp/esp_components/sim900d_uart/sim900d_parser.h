@@ -29,7 +29,7 @@ typedef enum {
 typedef struct {
     char params[MAX_PARAMS][MAX_PARAM_LEN];
     int paramCount;
-    // false если ответ в конеце не содержит OK, для многострочиных всегда true
+    // false если ответ в конце не содержит OK, для многострочиных всегда true
     bool result;
 
     // Дополнительно для многострочного ответа:
@@ -52,6 +52,23 @@ typedef enum {
     PARSE_STATE_DONE = 0,
     PARSE_STATE_IN_PROGRESS
 } parse_state_t;
+
+typedef enum {
+    /**
+     * @enum sms_param_index_t
+     * @brief Индексы параметров для параметров если принято смс.
+     *
+     */
+    SMS_PARAM_SENDER = 0,       // Отправитель
+    SMS_PARAM_TIMESTAMP = 1,    // Временная метка
+    SMS_PARAM_STAT = 2,         // Статус сообщения в памяти модуля, текстом
+    SMS_PARAM_SMSC = 3,         // Номер SMS центра, дейстивтельно только для SMS_MODE_PDU
+    SMS_PARAM_IS_CONCAT = 4,    // Флаг многочастного SMS, дейстивтельно только для SMS_MODE_PDU
+    SMS_PARAM_CONCAT_REF = 5,   // Уникальный идентификатор группы частей, дейстивтельно только для SMS_MODE_PDU
+    SMS_PARAM_CONCAT_TOTAL = 6, // Общее количество частей, дейстивтельно только для SMS_MODE_PDU
+    SMS_PARAM_CONCAT_SEQ = 7,   // Номер текущей части, дейстивтельно только для SMS_MODE_PDU
+    SMS_PARAM_COUNT = 8         // Общее количество параметров
+} sms_param_index_t;
 
 /**
  * @brief Регистрация обработчика для определённого префикса ответа SIM900D.
@@ -85,16 +102,6 @@ esp_err_t sim900d_register_handler(const char* prefix, Sim900dHandler handler);
  * @param line Входная строка для парсинга.
  */
 parse_state_t sim900d_parse_line(const char* line);
-
-/**
- * @brief Разбирает строку вида "(1,2,5-7,10)" и возвращает массив чисел.
- *        Если встречается диапазон через '-', то добавляет все числа из диапазона.
- * 
- * @param str Входная строка (например, "(1,2,5-7,10)")
- * @param outCount Указатель на переменную, куда будет записано количество чисел
- * @return int* Указатель на массив чисел (выделяется через malloc, не забудьте освободить)
- */
-int* sim900d_parse_number_list(const char* str, int* outCount);
 
 /**
  * @brief Устанавливает или получает режим SMS для SIM900D.

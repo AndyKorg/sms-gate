@@ -236,72 +236,84 @@ static char *ucs2_hex_to_utf8(const char *hex_str) {
   return utf8_str;
 }
 
-int *sim900d_parse_number_list(const char *str, int *outCount) {
-  int *numbers = NULL;
-  int count = 0;
-  int capacity = 8;
+// Сохранение данных из PDU в структуру параметров для смс ответа
+static void save_pdu_to_params(const sim900d_pdu_decoded_t *pdu, Sim900dParsedParams *currentParams) {
+  // Копируем строковые параметры
+  strncpy(currentParams->params[SMS_PARAM_SMSC], pdu->smsc, MAX_PARAM_LEN - 1);
+  currentParams->params[SMS_PARAM_SMSC][MAX_PARAM_LEN - 1] = '\0';
 
-  if (!str || !outCount)
+  strncpy(currentParams->params[SMS_PARAM_SENDER], pdu->sender, MAX_PARAM_LEN - 1);
+  currentParams->params[SMS_PARAM_SENDER][MAX_PARAM_LEN - 1] = '\0';
+
+  strncpy(currentParams->params[SMS_PARAM_TIMESTAMP], pdu->timestamp, MAX_PARAM_LEN - 1);
+  currentParams->params[SMS_PARAM_TIMESTAMP][MAX_PARAM_LEN - 1] = '\0';
+
+  // Конвертируем булевое значение в строку
+  strcpy(currentParams->params[SMS_PARAM_IS_CONCAT], pdu->is_concat ? "1" : "0");
+
+  // Конвертируем числовые значения в строки
+  snprintf(currentParams->params[SMS_PARAM_CONCAT_REF], MAX_PARAM_LEN, "%u", pdu->concat_ref);
+  snprintf(currentParams->params[SMS_PARAM_CONCAT_TOTAL], MAX_PARAM_LEN, "%u", pdu->concat_total);
+  snprintf(currentParams->params[SMS_PARAM_CONCAT_SEQ], MAX_PARAM_LEN, "%u", pdu->concat_seq);
+
+  // Копируем текст в multilineBody
+  strncpy(currentParams->multilineBody, pdu->text, sizeof(currentParams->multilineBody) - 1);
+  currentParams->multilineBody[sizeof(currentParams->multilineBody) - 1] = '\0';
+
+  // Устанавливаем количество параметров
+  currentParams->paramCount = SMS_PARAM_COUNT;
+
+  // Устанавливаем результат в true для SMS
+  currentParams->result = true;
+
+  // Устанавливаем режим SMS
+  currentParams->sms_mode = SMS_MODE_PDU;
+}
+
+// Поиск статуса смс по коду в виде строки
+static const char *sim900d_sms_status_text_by_code_str(const char *code_str) {
+  if (code_str == NULL)
     return NULL;
 
-  // Пропускаем пробелы и открывающую скобку
-  while (*str && (*str == ' ' || *str == '\t' || *str == '('))
-    str++;
+  // Преобразуем строку в int
+  char *endptr;
+  long code = strtol(code_str, &endptr, 10);
 
-  numbers = (int *)malloc(capacity * sizeof(int));
-  if (!numbers)
+  // Проверка, вся ли строка была числом
+  if (*endptr != '\0')
     return NULL;
 
-  while (*str && *str != ')') {
-    // Пропускаем пробелы
-    while (*str == ' ' || *str == '\t')
-      str++;
-
-    // Читаем первое число
-    char *endptr;
-    int start = (int)strtol(str, &endptr, 10);
-    if (endptr == str)
-      break; // Не число
-
-    str = endptr;
-
-    // Проверяем на диапазон
-    if (*str == '-') {
-      str++;
-      int end = (int)strtol(str, &endptr, 10);
-      if (endptr == str)
-        break; // Не число после '-'
-      str = endptr;
-      if (end >= start) {
-        for (int v = start; v <= end; v++) {
-          if (count >= capacity) {
-            capacity *= 2;
-            numbers = (int *)realloc(numbers, capacity * sizeof(int));
-            if (!numbers)
-              return NULL;
-          }
-          numbers[count++] = v;
-        }
-      }
-    } else {
-      if (count >= capacity) {
-        capacity *= 2;
-        numbers = (int *)realloc(numbers, capacity * sizeof(int));
-        if (!numbers)
-          return NULL;
-      }
-      numbers[count++] = start;
+  // Поиск по числовому полю
+  for (size_t i = 0; i < sizeof(sms_status_table) / sizeof(sms_status_table[0]); ++i) {
+    if (sms_status_table[i].code == code) {
+      return sms_status_table[i].text;
     }
-
-    // Пропускаем пробелы и запятые
-    while (*str == ' ' || *str == '\t')
-      str++;
-    if (*str == ',')
-      str++;
   }
 
-  *outCount = count;
-  return numbers;
+  return NULL; // Не найдено
+}
+
+static void sim900d_reorder_params_by_mode(void) {
+  char reordered[MAX_PARAMS][MAX_PARAM_LEN] = {0};
+
+  if (currentParams.sms_mode == SMS_MODE_PDU) {
+    // В режим PDU остальные параметры берутся из сообщения.
+    const char *status_text = sim900d_sms_status_text_by_code_str(currentParams.params[2]);
+    if (status_text) {
+      strncpy(reordered[SMS_PARAM_STAT], status_text, MAX_PARAM_LEN - 1);
+    }
+  } else {
+    //В простом текстовом режиме
+    strncpy(reordered[SMS_PARAM_SENDER], currentParams.params[0], MAX_PARAM_LEN - 1);
+    strncpy(reordered[SMS_PARAM_TIMESTAMP], currentParams.params[1], MAX_PARAM_LEN - 1);
+    strncpy(reordered[SMS_PARAM_STAT], currentParams.params[2], MAX_PARAM_LEN - 1);
+  }
+
+  // Копируем обратно
+  for (int i = 0; i < MAX_PARAMS; ++i) {
+    strncpy(currentParams.params[i], reordered[i], MAX_PARAM_LEN - 1);
+    currentParams.params[i][MAX_PARAM_LEN - 1] = '\0'; // защита от переполнения
+  }
 }
 
 // Обработка завершения многострочного ответа (OK/ERROR)
@@ -323,26 +335,14 @@ static void sim900d_finish_multiline_response() {
   ESP_LOGV(TAG, "Body %s", currentParams.multilineBody);
 #endif
 
-  sim900d_sms_mode_t mode;
-  if (sms_mode_mutex) {
-    if (xSemaphoreTake(sms_mode_mutex, portMAX_DELAY) == pdTRUE) {
-      mode = sms_mode;
-      xSemaphoreGive(sms_mode_mutex);
-    } else {
-      mode = sms_mode;
-    }
-  } else {
-    mode = sms_mode;
-  }
-  currentParams.sms_mode = mode;
+  sim900d_reorder_params_by_mode();
 
-  if (mode == SMS_MODE_PDU) {
+  if (currentParams.sms_mode == SMS_MODE_PDU) {
     // 🔍 Диагностика PDU
 #ifdef SIM900D_VERBOSE
     ESP_LOGI(TAG, "PDU mode detected");
     ESP_LOGI(TAG, "Raw PDU string: %s", currentParams.multilineBody);
 #endif
-
     sim900d_pdu_decoded_t pdu;
     if (sim900d_decode_pdu(currentParams.multilineBody, &pdu)) {
 #ifdef SIM900D_VERBOSE
@@ -350,17 +350,13 @@ static void sim900d_finish_multiline_response() {
       ESP_LOGI(TAG, "  Sender:    %s", pdu.sender);
       ESP_LOGI(TAG, "  Timestamp: %s", pdu.timestamp);
       ESP_LOGI(TAG, "  Text:      %s", pdu.text);
+      ESP_LOGI(TAG, "  smsc:      %s", pdu.smsc);
+      ESP_LOGI(TAG, "  is_concat: %d", pdu.is_concat);
+      ESP_LOGI(TAG, "  ref:       %d", pdu.concat_ref);
+      ESP_LOGI(TAG, "  seq:       %d", pdu.concat_seq);
+      ESP_LOGI(TAG, "  total:     %d", pdu.concat_total);
 #endif
-      strncpy(currentParams.params[0], pdu.sender, sizeof(currentParams.params[0]) - 1);
-      currentParams.params[0][sizeof(currentParams.params[0]) - 1] = '\0';
-
-      strncpy(currentParams.params[1], pdu.timestamp, sizeof(currentParams.params[1]) - 1);
-      currentParams.params[1][sizeof(currentParams.params[1]) - 1] = '\0';
-
-      strncpy(currentParams.multilineBody, pdu.text, sizeof(currentParams.multilineBody) - 1);
-      currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
-
-      currentParams.paramCount = 3; // sender, timestamp, text
+      save_pdu_to_params(&pdu, &currentParams);
     } else {
 #ifdef SIM900D_VERBOSE
       ESP_LOGW(TAG, "PDU decode failed");
@@ -469,6 +465,7 @@ static void sim900d_start_multiline_response(const char *prefix, const char *p, 
     currentParams.params[currentParams.paramCount][MAX_PARAM_LEN - 1] = '\0';
     currentParams.paramCount++;
   }
+
   while (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t')
     p++;
   if (*p) {
@@ -477,6 +474,7 @@ static void sim900d_start_multiline_response(const char *prefix, const char *p, 
   } else {
     multilineBuffer[0] = '\0';
   }
+
   // Если после заголовка сразу идёт OK/ERROR, обработаем это тут же
   char *next = strtok_r(NULL, "\r\n", saveptr);
   while (next) {
@@ -491,6 +489,8 @@ parse_state_t sim900d_parse_line(const char *line) {
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
 #endif
+
+  sim900d_sms_mode(&(currentParams.sms_mode), currentParams.sms_mode, false);
 
   // Буфер для одной строки (максимум 512 символов)
   char local_line[513];
@@ -606,24 +606,6 @@ esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
   return ESP_ERR_NO_MEM;
 }
 
-/**
- * @brief Устанавливает или получает режим SMS для SIM900D.
- *
- * Эта функция позволяет установить или получить текущий режим SMS (текстовый или PDU)
- * для модуля SIM900D. Доступ к режиму защищён мьютексом для обеспечения потокобезопасности.
- *
- * @param[out] mode     Указатель на переменную, в которую будет записан текущий режим SMS.
- *                      Может быть NULL, если получение режима не требуется.
- * @param[in]  set_mode Режим SMS, который необходимо установить (используется только если set == true).
- *                      Допустимые значения: SMS_MODE_TEXT или SMS_MODE_PDU.
- * @param[in]  set      Если true — установить режим SMS в set_mode; если false — только получить текущий режим.
- *
- * @return
- *      - ESP_OK:        Операция выполнена успешно.
- *      - ESP_ERR_INVALID_ARG: Передан некорректный режим SMS для установки.
- *      - ESP_ERR_NO_MEM: Не удалось создать мьютекс из-за нехватки памяти.
- *      - ESP_FAIL:      Не удалось получить мьютекс.
- */
 esp_err_t sim900d_sms_mode(sim900d_sms_mode_t *mode, sim900d_sms_mode_t set_mode, bool set) {
   if (set) {
     if (set_mode != SMS_MODE_TEXT && set_mode != SMS_MODE_PDU) {

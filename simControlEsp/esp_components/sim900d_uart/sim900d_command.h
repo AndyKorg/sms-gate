@@ -132,6 +132,26 @@ static const sim900d_cmgda_mode_pair_t sim900d_cmgda_mode_pairs[] = {
     { SIM900D_CMGDA_PDU_DEL_ALL,    "DEL ALL"    },
 };
 
+/**
+ * @brief Структура словаря статусов СМС модуля.
+ */
+typedef struct {
+    int code;             // Числовой код (для PDU-режима)
+    const char *text;     // Текстовое представление (для текстового режима)
+    const char *desc;     // Описание статуса
+} sim900d_sms_status_t;
+
+/**
+ * @brief Словарь статусов СМС в паямти модуля.
+ */
+static const sim900d_sms_status_t sms_status_table[] = {
+    {0, "REC UNREAD", "Получено, но не прочитано"},
+    {1, "REC READ",   "Получено и прочитано"},
+    {2, "STO UNSENT", "Сохранено, но не отправлено"},
+    {3, "STO SENT",   "Сохранено и отправлено"}
+};
+
+
 /***********************************************
             Команды и ответы
 ***********************************************/

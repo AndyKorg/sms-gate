@@ -10,6 +10,101 @@ static const char *TAG = "SIM900_HANDLER";
 
 static int last_sms_index = SIM900D_NO_INDEX_MEM; // Запрошенный индекс СМС из памяти sim900
 
+/**
+ * Вспомогательные функции
+ */
+
+/**
+ * @brief Разбирает строку вида "(1,2,5-7,10)" и возвращает массив чисел.
+ *        Если встречается диапазон через '-', то добавляет все числа из диапазона.
+ * 
+ * @param str Входная строка (например, "(1,2,5-7,10)")
+ * @param outCount Указатель на переменную, куда будет записано количество чисел
+ * @return int* Указатель на массив чисел (выделяется через malloc, не забудьте освободить)
+ */
+static int *sim900d_parse_number_list(const char *str, int *outCount) {
+  int *numbers = NULL;
+  int count = 0;
+  int capacity = 8;
+
+  if (!str || !outCount)
+    return NULL;
+
+  // Пропускаем пробелы и открывающую скобку
+  while (*str && (*str == ' ' || *str == '\t' || *str == '('))
+    str++;
+
+  numbers = (int *)malloc(capacity * sizeof(int));
+  if (!numbers)
+    return NULL;
+
+  while (*str && *str != ')') {
+    // Пропускаем пробелы
+    while (*str == ' ' || *str == '\t')
+      str++;
+
+    // Читаем первое число
+    char *endptr;
+    int start = (int)strtol(str, &endptr, 10);
+    if (endptr == str)
+      break; // Не число
+
+    str = endptr;
+
+    // Проверяем на диапазон
+    if (*str == '-') {
+      str++;
+      int end = (int)strtol(str, &endptr, 10);
+      if (endptr == str)
+        break; // Не число после '-'
+      str = endptr;
+      if (end >= start) {
+        for (int v = start; v <= end; v++) {
+          if (count >= capacity) {
+            capacity *= 2;
+            numbers = (int *)realloc(numbers, capacity * sizeof(int));
+            if (!numbers)
+              return NULL;
+          }
+          numbers[count++] = v;
+        }
+      }
+    } else {
+      if (count >= capacity) {
+        capacity *= 2;
+        numbers = (int *)realloc(numbers, capacity * sizeof(int));
+        if (!numbers)
+          return NULL;
+      }
+      numbers[count++] = start;
+    }
+
+    // Пропускаем пробелы и запятые
+    while (*str == ' ' || *str == '\t')
+      str++;
+    if (*str == ',')
+      str++;
+  }
+
+  *outCount = count;
+  return numbers;
+}
+
+static bool list_contains(int *list, int count, int val) {
+  for (int i = 0; i < count; i++) {
+    if (list[i] == val)
+      return true;
+  }
+  return false;
+}
+
+/**
+ * Обработка ответов модуля
+ */
+
+/**
+ * Состояние памяти СМС
+ */
 static void sim900d_cpms_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < 6) {
     ESP_LOGE(TAG, SIM900D_RESP_CPMS " invalid params");
@@ -39,6 +134,9 @@ static void sim900d_cpms_handler(Sim900dParsedParams *params) {
   sim900d_enqueue_lowprio_cmd(SIM900D_CMD_CREG, pdMS_TO_TICKS(500));
 }
 
+/**
+ * Получное СМС
+ */
 static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
   if (!params) {
     ESP_LOGE(TAG, SIM900D_RESP_CMGR " invalid params");
@@ -49,15 +147,27 @@ static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
   }
 
   sms_message_t sms = {0};
-  strncpy(sms.status, params->params[0], sizeof(sms.status) - 1);
-  strncpy(sms.sender, params->params[1], sizeof(sms.sender) - 1);
-  strncpy(sms.timestamp, params->params[3], sizeof(sms.timestamp) - 1);
-  strncpy(sms.text, params->multilineBody, sizeof(sms.text) - 1);
+  strncpy(sms.status, params->params[SMS_PARAM_SENDER], sizeof(sms.status) - 1);
+  strncpy(sms.sender, params->params[SMS_PARAM_SENDER], sizeof(sms.sender) - 1);
+  strncpy(sms.timestamp, params->params[SMS_PARAM_TIMESTAMP], sizeof(sms.timestamp) - 1);
+  sim900d_sms_mode_t mode;
+  sim900d_sms_mode(&mode, mode, false);
+  sms.pdu_mode = mode == SMS_MODE_PDU;
+  int tmp;
+  sscanf(params->params[SMS_PARAM_IS_CONCAT], "%d", &tmp);
+  sms.is_concat = tmp != 0;
+  sscanf(params->params[SMS_PARAM_CONCAT_REF], "%d", &sms.concat_ref);
+  sscanf(params->params[SMS_PARAM_CONCAT_TOTAL], "%d", &sms.concat_total);
+  sscanf(params->params[SMS_PARAM_CONCAT_SEQ], "%d", &sms.concat_seq);
+  strncpy(sms.smsc, params->params[SMS_PARAM_SMSC], sizeof(sms.smsc) - 1);
   sms.index = last_sms_index;
   sim900d_enqueue_sms(&sms);
   last_sms_index = SIM900D_NO_INDEX_MEM;
 }
 
+/**
+ * Уведомление о приходе СМС
+ */
 static void sim900d_cmti_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < 2) {
     ESP_LOGE(TAG, SIM900D_RESP_CMTI " invalid params");
@@ -70,14 +180,9 @@ static void sim900d_cmti_handler(Sim900dParsedParams *params) {
   sim900d_enqueue_lowprio_cmd(cmd, pdMS_TO_TICKS(1000));
 }
 
-static bool list_contains(int *list, int count, int val) {
-  for (int i = 0; i < count; i++) {
-    if (list[i] == val)
-      return true;
-  }
-  return false;
-}
-
+/**
+ * Поддерживаемые форматы уведомления о СМС
+ */
 static void sim900d_cnmi_test_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < SIM900D_CNMI_PARAM_MAX) {
     ESP_LOGE(TAG, SIM900D_RESP_CNMI_TEST " invalid params");
@@ -129,6 +234,9 @@ static void sim900d_cnmi_test_handler(Sim900dParsedParams *params) {
   }
 }
 
+/**
+ * Нужен ли PIN код для работы с SIM картой
+ */
 static void sim900d_cpin_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < 1) {
     ESP_LOGE(TAG, SIM900D_RESP_CPIN " invalid params");
@@ -145,6 +253,9 @@ static void sim900d_cpin_handler(Sim900dParsedParams *params) {
   }
 }
 
+/**
+ * Состояние регистрации в сети
+ */
 static void sim900d_creg_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < 2) {
     ESP_LOGE(TAG, SIM900D_RESP_CREG " invalid params");
@@ -196,6 +307,9 @@ static void sim900d_creg_handler(Sim900dParsedParams *params) {
   sim900d_notify_network_status(registered);
 }
 
+/**
+ * Регистрация функций обработчиков в парсере
+ */
 void sim900d_register_handlers(void) {
   bool ok = true;
   ok &= sim900d_register_handler(SIM900D_RESP_CPIN, sim900d_cpin_handler) == ESP_OK;
