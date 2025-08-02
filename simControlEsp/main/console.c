@@ -10,13 +10,16 @@
 
 #include "../esp_components/sim900d_uart/sim900d_command.h"
 #include "../esp_components/sim900d_uart/sim900d_parser.h"
-
+#include "../esp_components/sim900d_uart/sim900d_uart_internal.h"
 
 #define UART_NUM UART_NUM_0
 #define UART_RX_BUF_SIZE 1024
 
 static const char *TAG = "console";
 
+/*
+ * cmd_parse
+ */
 static void sim900d_handler(Sim900dParsedParams *params) {
   if (!params || params->paramCount < 5) {
     ESP_LOGE(TAG, SIM900D_RESP_CMGR " invalid params");
@@ -41,7 +44,7 @@ static int cmd_parse(int argc, char **argv) {
   return 0;
 }
 
-static void register_console_commands(void) {
+static void register_parse(void) {
   const esp_console_cmd_t parse_cmd = {
       .command = "parse",
       .help = "Parse two parameters - answer & string line",
@@ -49,6 +52,48 @@ static void register_console_commands(void) {
       .func = &cmd_parse,
   };
   ESP_ERROR_CHECK(esp_console_cmd_register(&parse_cmd));
+}
+
+/*
+ * cmd_send_at
+ */
+static int cmd_send_at(int argc, char **argv) {
+  if (argc < 2) {
+    printf("Usage: send <AT command>\n");
+    return 1;
+  }
+
+  // Объединяем аргументы в одну строку AT-команды
+  char at_cmd[128] = {0};
+  size_t offset = 0;
+  for (int i = 1; i < argc && offset < sizeof(at_cmd) - 1; ++i) {
+    offset += snprintf(at_cmd + offset, sizeof(at_cmd) - offset, "%s%s", argv[i], (i < argc - 1 ? " " : ""));
+  }
+
+  char response[512] = {0};
+  int res = sim900d_send_at(at_cmd, response, sizeof(response), pdMS_TO_TICKS(3000));
+  if (res > 0) {
+    printf("Response:\n%s\n", response);
+  } else {
+    printf("Error sending AT command: %d\n", res);
+  }
+
+  return 0;
+}
+
+static void register_send(void) {
+  const esp_console_cmd_t send_cmd = {
+      .command = "send",
+      .help = "Send AT command to SIM900D and print response",
+      .hint = "<AT command>",
+      .func = &cmd_send_at,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&send_cmd));
+}
+
+void register_console_commands() {
+  register_parse();
+  register_send();
 }
 
 /*----------------------------*

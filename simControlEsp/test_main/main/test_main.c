@@ -4,6 +4,7 @@ void app_main(void) {
     UNITY_BEGIN();
     // Запускаем тест по имени
     unity_run_test_by_name("PDU Parser Test");
+    unity_run_test_by_name("Simple Parser Test");
     UNITY_END();
 }
 
