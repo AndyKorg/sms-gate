@@ -121,7 +121,7 @@ parse_state_t sim900d_parse_line(const char* line);
  *      - ESP_ERR_NO_MEM: Не удалось создать мьютекс из-за нехватки памяти.
  *      - ESP_FAIL:      Не удалось получить мьютекс.
  */
-esp_err_t sim900d_sms_mode(sim900d_sms_mode_t *mode, sim900d_sms_mode_t set_mode, bool set);
+esp_err_t sim900d_parser_sms_mode(sim900d_sms_mode_t *mode, sim900d_sms_mode_t set_mode, bool set);
 
 /**
  * @brief Инициализация парсера SIM900D.

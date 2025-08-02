@@ -25,7 +25,7 @@ static void test_cmgr_handler(Sim900dParsedParams *params) {
 TEST_CASE("PDU Parser Test", "[sim900d]") {
   sim900d_parser_init();
   sim900d_sms_mode_t mode = SMS_MODE_PDU;
-  sim900d_sms_mode(NULL, mode, true);
+  sim900d_parser_sms_mode(NULL, mode, true);
   sim900d_register_handler("+CMGR:", test_cmgr_handler);
 
   const char *test_line = "+CMGR: "
@@ -45,6 +45,33 @@ TEST_CASE("PDU Parser Test", "[sim900d]") {
   TEST_ASSERT_NOT_EQUAL(0, last_params.paramCount);
   TEST_ASSERT_NOT_EQUAL('\0', last_params.multilineBody[0]);
   TEST_ASSERT_EQUAL(SMS_MODE_PDU, last_params.sms_mode);
+
+  // Вывод для отладки
+  printf("paramCount: %d\n", last_params.paramCount);
+  printf("multilineBody: %s\n", last_params.multilineBody);
+  printf("sms_mode: %d\n", last_params.sms_mode);
+}
+
+TEST_CASE("Simple Parser Test", "[sim900d]") {
+  sim900d_parser_init();
+  sim900d_sms_mode_t mode = SMS_MODE_TEXT;
+  sim900d_parser_sms_mode(NULL, mode, true);
+  sim900d_register_handler("+CMGR:", test_cmgr_handler);
+
+  const char *test_line = "+CMGR: "
+                          "\"REC UNREAD\",\"+79697120710\",\"\",\"25/08/02,17:22:52+12\"\r\n"
+                          "0410043F0440043E0440043C0020\r\n\r\nOK\r\n";
+
+  handler_called = false;
+  parse_state_t state = sim900d_parse_line(test_line);
+
+  TEST_ASSERT_EQUAL(PARSE_STATE_DONE, state);
+  TEST_ASSERT_TRUE(handler_called);
+
+  // Проверяем, что параметры корректно разобраны
+  TEST_ASSERT_NOT_EQUAL(0, last_params.paramCount);
+  TEST_ASSERT_NOT_EQUAL('\0', last_params.multilineBody[0]);
+  TEST_ASSERT_EQUAL(SMS_MODE_TEXT, last_params.sms_mode);
 
   // Вывод для отладки
   printf("paramCount: %d\n", last_params.paramCount);

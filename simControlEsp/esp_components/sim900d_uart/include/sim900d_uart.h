@@ -56,8 +56,10 @@ void sim900d_network_monitor_start(uint32_t period_ms);
  * 1. Проверка готовности SIM-карты (CPIN).
  * 2. Проверка регистрации в сети (CREG), пока бесконечное ожидание.
  * и т.д.
+ * @param sms_pdu_mode Режим работы с SMS сообщениями: true - PDU, false - простой текстовый формат.
+ * В простом текстовом формате не все поля заполняйются см. описание sms_message_t
  */
-void sim900d_service_start();
+void sim900d_service_start(bool sms_pdu_mode);
 
 /**
  * @brief Жесткий сброс модуля SIM900D с помощью пина PWRKEY и чтение состояния пина STATUS.

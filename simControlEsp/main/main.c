@@ -27,7 +27,8 @@
 static const char *TAG = "main";
 
 static esp_err_t sms_received_callback(const sms_message_t *sms) {
-  printf("SMS received! Index: %d, From: %s, Text: %s\n", sms->index, sms->sender, sms->text);
+  printf("SMS received! Index: %d, From: %s, Status: %s\n", sms->index, sms->sender, sms->status);
+  printf("Text: %s\n", sms->text);
   if (sms->pdu_mode) {
     printf("Многочастное: %s\n", sms->is_concat ? "Да" : "Нет");
     if (sms->is_concat) {
@@ -129,7 +130,7 @@ void app_main(void) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
         sim900d_sms_set_callback(sms_received_callback);
         sim900d_network_status_set_callback(network_status_callback);
-        sim900d_service_start();
+        sim900d_service_start(true);
       } else {
         ESP_LOGE(TAG, "Failed auto-baud SIM900D");
       }

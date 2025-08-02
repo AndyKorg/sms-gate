@@ -1,6 +1,8 @@
 #ifndef SIM900D_TYPES_H
 #define SIM900D_TYPES_H
 
+#define SIM900D_TEXT_LEN_MAX  512
+
 /**
  * @brief Структура, представляющая SMS-сообщение.
  *
@@ -25,7 +27,7 @@
 typedef struct {
   int index;
   char sender[32];
-  char text[512];
+  char text[SIM900D_TEXT_LEN_MAX];
   char status[32];
   char timestamp[32];
   bool pdu_mode;

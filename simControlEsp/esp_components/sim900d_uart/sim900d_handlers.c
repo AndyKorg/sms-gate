@@ -1,10 +1,31 @@
+/**
+ * @brief Последовательность команд
+ *
+ * start => SIM900D_CMD_CPIN (pin card) -> sim900d_cpin_handler
+ * => SIM900D_CMD_CPMS (memory state)  -> sim900d_cpms_handler (low SIM900D_CMGDA_PDU_DEL_ALL)
+ * => SIM900D_CMD_CREG (net state) -> sim900d_creg_handler (<= repeat =>> SIM900D_CMD_CREG)
+ * => SIM900D_RESP_CNMI_TEST (format sms indication) -> sim900d_cnmi_test_handler (low SIM900D_CMD_SMS_NOTIFY)
+ * => wait
+ *
+ * Уведомление о приходе смс
+ * => sim900d_cmti_handler (low SIM900D_CMD_READ_SMS_FMT)
+ * => wait
+ *
+ * Получить СМС
+ * => sim900d_cmgr_handler (отправить СМС в очередь)
+ * => wait
+ *
+ */
+
 #include "sim900d_handlers.h"
 #include "sim900d_command.h"
 #include "sim900d_parser.h"
 #include "sim900d_uart_internal.h"
-
-#include "esp_log.h"
 #include <string.h>
+
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
+#include "esp_log.h"
 
 static const char *TAG = "SIM900_HANDLER";
 
@@ -17,7 +38,7 @@ static int last_sms_index = SIM900D_NO_INDEX_MEM; // Запрошенный ин
 /**
  * @brief Разбирает строку вида "(1,2,5-7,10)" и возвращает массив чисел.
  *        Если встречается диапазон через '-', то добавляет все числа из диапазона.
- * 
+ *
  * @param str Входная строка (например, "(1,2,5-7,10)")
  * @param outCount Указатель на переменную, куда будет записано количество чисел
  * @return int* Указатель на массив чисел (выделяется через malloc, не забудьте освободить)
@@ -99,6 +120,28 @@ static bool list_contains(int *list, int count, int val) {
 }
 
 /**
+ * @brief Установить режим приёма SMS (PDU или TEXT).
+ *
+ * @param sms_format Режим: SMS_MODE_PDU или SMS_MODE_TEXT
+ * @return true если успешно, false если ошибка
+ */
+static bool sim900d_set_sms_mode(void) {
+  char format_cmd[32];
+  char response_buffer[64];
+  sim900d_sms_mode_t sms_format = SMS_MODE_PDU;
+  sim900d_parser_sms_mode(&sms_format, sms_format, false);
+  snprintf(format_cmd, sizeof(format_cmd), SIM900D_CMD_CMGF_MODE, sms_format == SMS_MODE_PDU ? 0 : 1);
+  int len = sim900d_send_at(format_cmd, response_buffer, sizeof(response_buffer), pdMS_TO_TICKS(500));
+  if (len >= 0 && strstr(response_buffer, "OK") != NULL) {
+    ESP_LOGI(TAG, "SIM900D: SMS mode set to %s", sms_format == SMS_MODE_PDU ? "PDU" : "TEXT");
+    return true;
+  }
+
+  ESP_LOGE(TAG, "SIM900D: Failed to set SMS mode, response: %s", response_buffer);
+  return false;
+}
+
+/**
  * Обработка ответов модуля
  */
 
@@ -120,9 +163,9 @@ static void sim900d_cpms_handler(Sim900dParsedParams *params) {
     ESP_LOGW(TAG, "SMS memory full, deleting all messages...");
     char del_cmd[64];
     sim900d_sms_mode_t sms_format;
-    sim900d_sms_mode(&sms_format, sms_format, false);
+    sim900d_parser_sms_mode(&sms_format, sms_format, false);
     if (sms_format == SMS_MODE_PDU) {
-      snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS"%d\r\n",
+      snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS "%d\r\n",
                sim900d_cmgda_mode_pairs[SIM900D_CMGDA_PDU_DEL_ALL - 1].pdu_mode);
     } else {
       snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS "\"%s\"\r\n",
@@ -147,11 +190,11 @@ static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
   }
 
   sms_message_t sms = {0};
-  strncpy(sms.status, params->params[SMS_PARAM_SENDER], sizeof(sms.status) - 1);
+  strncpy(sms.status, params->params[SMS_PARAM_STAT], sizeof(sms.status) - 1);
   strncpy(sms.sender, params->params[SMS_PARAM_SENDER], sizeof(sms.sender) - 1);
   strncpy(sms.timestamp, params->params[SMS_PARAM_TIMESTAMP], sizeof(sms.timestamp) - 1);
   sim900d_sms_mode_t mode;
-  sim900d_sms_mode(&mode, mode, false);
+  sim900d_parser_sms_mode(&mode, mode, false);
   sms.pdu_mode = mode == SMS_MODE_PDU;
   int tmp;
   sscanf(params->params[SMS_PARAM_IS_CONCAT], "%d", &tmp);
@@ -160,6 +203,8 @@ static void sim900d_cmgr_handler(Sim900dParsedParams *params) {
   sscanf(params->params[SMS_PARAM_CONCAT_TOTAL], "%d", &sms.concat_total);
   sscanf(params->params[SMS_PARAM_CONCAT_SEQ], "%d", &sms.concat_seq);
   strncpy(sms.smsc, params->params[SMS_PARAM_SMSC], sizeof(sms.smsc) - 1);
+  memset(sms.text, 0, SIM900D_TEXT_LEN_MAX);
+  strncpy(sms.text, params->multilineBody, strlen(params->multilineBody));
   sms.index = last_sms_index;
   sim900d_enqueue_sms(&sms);
   last_sms_index = SIM900D_NO_INDEX_MEM;
@@ -276,6 +321,7 @@ static void sim900d_creg_handler(Sim900dParsedParams *params) {
   case 1:
     ESP_LOGI(TAG, "Registered, home network");
     xEventGroupSetBits(evt, SIM900D_UART_EVENT_NET_REGISTERED);
+    sim900d_set_sms_mode();
     sim900d_send_at(SIM900D_RESP_CNMI_TEST, NULL, 0, pdMS_TO_TICKS(500));
     registered = true;
     break;
@@ -311,6 +357,9 @@ static void sim900d_creg_handler(Sim900dParsedParams *params) {
  * Регистрация функций обработчиков в парсере
  */
 void sim900d_register_handlers(void) {
+#if CONFIG_LOG_DEFAULT_LEVEL > 1
+  esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
+#endif
   bool ok = true;
   ok &= sim900d_register_handler(SIM900D_RESP_CPIN, sim900d_cpin_handler) == ESP_OK;
   ok &= sim900d_register_handler(SIM900D_RESP_CREG, sim900d_creg_handler) == ESP_OK;

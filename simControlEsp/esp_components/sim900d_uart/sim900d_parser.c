@@ -303,10 +303,10 @@ static void sim900d_reorder_params_by_mode(void) {
       strncpy(reordered[SMS_PARAM_STAT], status_text, MAX_PARAM_LEN - 1);
     }
   } else {
-    //В простом текстовом режиме
-    strncpy(reordered[SMS_PARAM_SENDER], currentParams.params[0], MAX_PARAM_LEN - 1);
-    strncpy(reordered[SMS_PARAM_TIMESTAMP], currentParams.params[1], MAX_PARAM_LEN - 1);
-    strncpy(reordered[SMS_PARAM_STAT], currentParams.params[2], MAX_PARAM_LEN - 1);
+    // В простом текстовом режиме
+    strncpy(reordered[SMS_PARAM_SENDER], currentParams.params[1], MAX_PARAM_LEN - 1);
+    strncpy(reordered[SMS_PARAM_TIMESTAMP], currentParams.params[3], MAX_PARAM_LEN - 1);
+    strncpy(reordered[SMS_PARAM_STAT], currentParams.params[0], MAX_PARAM_LEN - 1);
   }
 
   // Копируем обратно
@@ -363,18 +363,29 @@ static void sim900d_finish_multiline_response() {
 #endif
     }
   } else if (is_valid_ucs2_hex(currentParams.multilineBody)) {
+#ifdef SIM900D_VERBOSE
+    ESP_LOGV(TAG, "UCS2 decode");
+#endif
     char *utf8 = ucs2_hex_to_utf8(currentParams.multilineBody);
     if (utf8) {
-      strncpy(currentParams.multilineBody, utf8, sizeof(currentParams.multilineBody) - 1);
-      currentParams.multilineBody[sizeof(currentParams.multilineBody) - 1] = '\0';
+#ifdef SIM900D_VERBOSE
+      ESP_LOGV(TAG, "utf8: %s", utf8);
+#endif
+      strncpy(currentParams.multilineBody, utf8, strlen(utf8) - 1);
+      currentParams.multilineBody[strlen(utf8) - 1] = '\0';
       free(utf8);
+      currentParams.sms_mode = SMS_MODE_TEXT;
+      currentParams.result = true;
     }
+  } else {
+#ifdef SIM900D_VERBOSE
+    ESP_LOGI(TAG, "Not decode");
+#endif
   }
 
   if (currentHandler) {
     currentHandler(&currentParams);
   }
-  currentState = STATE_IDLE;
   multilineBuffer[0] = '\0';
   currentHandler = NULL;
 }
@@ -490,7 +501,7 @@ parse_state_t sim900d_parse_line(const char *line) {
   ESP_LOGV(TAG, "Parsing line: \"%s\"", line);
 #endif
 
-  sim900d_sms_mode(&(currentParams.sms_mode), currentParams.sms_mode, false);
+  sim900d_parser_sms_mode(&(currentParams.sms_mode), currentParams.sms_mode, false);
 
   // Буфер для одной строки (максимум 512 символов)
   char local_line[513];
@@ -511,8 +522,11 @@ parse_state_t sim900d_parse_line(const char *line) {
 
     // Если аккумулируем многострочный ответ
     if (currentState == STATE_ACCUMULATING_MULTILINE) {
-      sim900d_accumulate_multiline(str);
-      // завершили аккумулирование, продолжаем разбор следующих строк
+      if (sim900d_accumulate_multiline(str)) {
+        // завершили аккумулирование
+        currentState = STATE_IDLE;
+      }
+      // продолжаем разбор следующих строк
       str = strtok_r(NULL, "\r\n", &saveptr);
       continue;
     }
@@ -606,7 +620,7 @@ esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
   return ESP_ERR_NO_MEM;
 }
 
-esp_err_t sim900d_sms_mode(sim900d_sms_mode_t *mode, sim900d_sms_mode_t set_mode, bool set) {
+esp_err_t sim900d_parser_sms_mode(sim900d_sms_mode_t *mode, sim900d_sms_mode_t set_mode, bool set) {
   if (set) {
     if (set_mode != SMS_MODE_TEXT && set_mode != SMS_MODE_PDU) {
       return ESP_ERR_INVALID_ARG;

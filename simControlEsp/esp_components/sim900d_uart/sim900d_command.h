@@ -187,11 +187,6 @@ static const sim900d_sms_status_t sms_status_table[] = {
 #define SIM900D_ECHO_ON SIM900D_ATE "1"
 
 /**
- * @brief Установка текстового режима SMS (AT+CMGF=1).
- */
-#define SIM900D_CMD_SMS_MODE SIM900D_AT "+CMGF=1\r\n"
-
-/**
  * @brief AT-команда для проверки поддерживаемых параметров команды +CNMI на модуле SIM900D.
  *
  * Эта команда запрашивает у модема поддерживаемые значения параметров команды +CNMI (уведомления о новых SMS).

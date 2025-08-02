@@ -16,14 +16,14 @@
 
 static const char *TAG = "SIM900";
 
-#include "sim900d_uart.h"
 #include "sim900d_command.h"
 #include "sim900d_handlers.h"
 #include "sim900d_parser.h"
+#include "sim900d_uart.h"
 #include "sim900d_uart_internal.h"
 
 #define UART_BUF_SIZE 1024
-#define UART_DEFAULT_READ_TIMEOUT_MS  100
+#define UART_DEFAULT_READ_TIMEOUT_MS 100
 
 typedef struct {
   uart_port_t uart_num;
@@ -72,10 +72,10 @@ int sim900d_send_at(const char *cmd, char *response, size_t resp_size, TickType_
   xEventGroupSetBits(handle.uart_event_group, SIM900D_UART_EVENT_BUSY);
   ESP_LOGV(TAG, "send_at:Busy set");
   bool white_responce = (response && (resp_size > 1));
-  if (white_responce){
+  if (white_responce) {
     xEventGroupClearBits(handle.uart_event_group, SIM900D_UART_EVENT_READ_ENABLE);
-    //Ожидание гарантированого завершения предыдущего чтения
-    vTaskDelay(pdMS_TO_TICKS(UART_DEFAULT_READ_TIMEOUT_MS*2));
+    // Ожидание гарантированого завершения предыдущего чтения
+    vTaskDelay(pdMS_TO_TICKS(UART_DEFAULT_READ_TIMEOUT_MS * 2));
     ESP_LOGV(TAG, "Read enable clear");
   }
   uart_write_bytes(handle.uart_num, cmd, strlen(cmd));
@@ -140,19 +140,12 @@ bool sim900d_enqueue_lowprio_cmd(const char *cmd, TickType_t timeout) {
 
 EventGroupHandle_t sim900d_get_event_group(void) { return handle.uart_event_group; }
 
-void sim900d_service_start() {
-  char format_cmd[32];
-  sim900d_sms_mode_t sms_format = SMS_MODE_PDU;
-  sim900d_sms_mode(NULL, sms_format, true);
-  snprintf(format_cmd, sizeof(format_cmd), SIM900D_CMD_CMGF_MODE, sms_format == SMS_MODE_PDU ? 0 : 1);
-  char response_buffer[64];
-  int len = sim900d_send_at(format_cmd, response_buffer, sizeof(response_buffer), pdMS_TO_TICKS(500));
-  if (len >= 0 && strstr(response_buffer, "OK") != NULL) {
+void sim900d_service_start(bool sms_pdu_mode) {
+  sim900d_sms_mode_t sms_format = sms_pdu_mode ? SMS_MODE_PDU : SMS_MODE_TEXT;
+  if (sim900d_parser_sms_mode(NULL, sms_format, true) == ESP_OK) {
+    ESP_LOGI(TAG, "SMS mode set to %s", sms_format == SMS_MODE_PDU ? "PDU" : "TEXT");
     // Зпускается последовательность вызовов обработчиков, см. sim900d_handlers.c
-    ESP_LOGI(TAG, "SIM900D->UART:SMS mode set to %s", sms_format == SMS_MODE_PDU ? "PDU" : "TEXT");
     sim900d_send_at(SIM900D_CMD_CPIN, NULL, 0, pdMS_TO_TICKS(500));
-  } else {
-    ESP_LOGE(TAG, "set sms mode fail %s", response_buffer);
   }
 }
 
@@ -275,13 +268,11 @@ static void sim900d_sms_task(void *pvParameters) {
 
   while (1) {
     if (xQueueReceive(handle.sms_queue, &sms, portMAX_DELAY) == pdTRUE) {
-      if (handle.sms_queue) {
-        // СМС удачно обработана и она была в памяти
-        if ((handle.sms_cb(&sms) == ESP_OK) && (sms.index != SIM900D_NO_INDEX_MEM)) {
-          char del_cmd[32];
-          snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS_BY_INDEX_FMT, sms.index);
-          sim900d_enqueue_lowprio_cmd(del_cmd, pdMS_TO_TICKS(500));
-        }
+      // СМС удачно обработана и она была в памяти модуля
+      if ((handle.sms_cb(&sms) == ESP_OK) && (sms.index != SIM900D_NO_INDEX_MEM)) {
+        char del_cmd[32];
+        snprintf(del_cmd, sizeof(del_cmd), SIM900D_CMD_DELETE_SMS_BY_INDEX_FMT, sms.index);
+        sim900d_enqueue_lowprio_cmd(del_cmd, pdMS_TO_TICKS(500));
       }
     }
   }
