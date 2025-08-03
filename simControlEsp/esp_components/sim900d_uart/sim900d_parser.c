@@ -5,12 +5,12 @@
 #include "sim900d_command.h"
 #include "sim900d_pdu.h"
 
-#define SIM900D_VERBOSE
+//#define SIM900D_VERBOSE
 #ifdef SIM900D_VERBOSE
 #undef LOG_LOCAL_LEVEL
 #define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
-#include "esp_log.h"
 #endif
+#include "esp_log.h"
 
 static const char *TAG = "PARSER";
 
@@ -19,7 +19,7 @@ static const char *handlerPrefixes[MAX_HANDLERS];
 static int handlerCount = 0;
 
 static char multilineBuffer[1024];
-static Sim900dHandler currentHandler = NULL;
+//Накопление параметров для функции callback
 static Sim900dParsedParams currentParams;
 
 // Очередь для передачи задач парсера
@@ -376,12 +376,6 @@ static void sim900d_finish_multiline_response() {
     ESP_LOGI(TAG, "Not decode");
 #endif
   }
-
-  if (currentHandler) {
-    currentHandler(&currentParams);
-  }
-  multilineBuffer[0] = '\0';
-  currentHandler = NULL;
 }
 
 // Обработка строки в режиме аккумулирования многострочного ответа
@@ -436,7 +430,6 @@ static bool sim900d_start_multiline_response(const char *prefix, const char *p, 
   ESP_LOGV(TAG, "Start multiline");
 #endif
   multilineBuffer[0] = '\0';
-  currentHandler = handlerTable[foundIndex];
 
   // Парсим параметры
   char buffer[MAX_PARAM_LEN];
@@ -665,7 +658,6 @@ esp_err_t sim900d_parser_init() {
 #endif
 
   handlerCount = 0;
-  currentHandler = NULL;
   multilineBuffer[0] = '\0';
   for (int i = 0; i < MAX_HANDLERS; i++) {
     handlerPrefixes[i] = NULL;

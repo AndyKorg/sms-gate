@@ -3,6 +3,9 @@
 
 #define SIM900D_TEXT_LEN_MAX  512
 
+#define SIM900S_SMS_MODE_PDU          true
+#define SIM900S_SMS_MODE_SIMPLE_TEXT  false
+
 /**
  * @brief Структура, представляющая SMS-сообщение.
  *

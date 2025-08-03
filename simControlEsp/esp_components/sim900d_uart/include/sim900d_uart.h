@@ -2,7 +2,7 @@
 #define SIM900D_UART_H
 
 #include "driver/uart.h"
-#include "sim900d_types.h"
+#include "sim900d_sms_types.h"
 
 /**
  * @brief Тип функции обратного вызова для обработки входящих SMS-сообщений.

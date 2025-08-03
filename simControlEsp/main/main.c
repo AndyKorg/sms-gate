@@ -130,7 +130,7 @@ void app_main(void) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
         sim900d_sms_set_callback(sms_received_callback);
         sim900d_network_status_set_callback(network_status_callback);
-        sim900d_service_start(true);
+        sim900d_service_start(SIM900S_SMS_MODE_PDU);
       } else {
         ESP_LOGE(TAG, "Failed auto-baud SIM900D");
       }

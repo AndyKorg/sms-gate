@@ -23,8 +23,11 @@
 #include "sim900d_uart_internal.h"
 #include <string.h>
 
+//#define SIM900D_VERBOSE
+#ifdef SIM900D_VERBOSE
 #undef LOG_LOCAL_LEVEL
 #define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
+#endif
 #include "esp_log.h"
 
 static const char *TAG = "SIM900_HANDLER";
@@ -133,7 +136,7 @@ static bool sim900d_set_sms_mode(void) {
   snprintf(format_cmd, sizeof(format_cmd), SIM900D_CMD_CMGF_MODE, sms_format == SMS_MODE_PDU ? 0 : 1);
   int len = sim900d_send_at(format_cmd, response_buffer, sizeof(response_buffer), pdMS_TO_TICKS(500));
   if (len >= 0 && strstr(response_buffer, "OK") != NULL) {
-    ESP_LOGI(TAG, "SIM900D: SMS mode set to %s", sms_format == SMS_MODE_PDU ? "PDU" : "TEXT");
+    ESP_LOGV(TAG, "SIM900D: SMS mode set to %s", sms_format == SMS_MODE_PDU ? "PDU" : "TEXT");
     return true;
   }
 

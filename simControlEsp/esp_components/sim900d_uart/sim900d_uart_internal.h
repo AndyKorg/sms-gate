@@ -10,7 +10,7 @@
 #include "sim900d_parser.h"
 #include "esp_err.h"
 
-#include "include/sim900d_types.h"
+#include "include/sim900d_sms_types.h"
 
 // Разрешение чтения из uart.
 #define SIM900D_UART_EVENT_READ_ENABLE (1 << 0)
