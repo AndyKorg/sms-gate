@@ -14,12 +14,6 @@
 
 static const char *TAG = "PARSER";
 
-/**
- * @brief Состояния парсера для обработки однострочных и многострочных ответов.
- */
-typedef enum { STATE_IDLE, STATE_ACCUMULATING_MULTILINE } ParserState;
-
-static ParserState currentState = STATE_IDLE;
 static Sim900dHandler handlerTable[MAX_HANDLERS];
 static const char *handlerPrefixes[MAX_HANDLERS];
 static int handlerCount = 0;
@@ -437,11 +431,10 @@ static bool sim900d_accumulate_multiline(const char *str) {
 }
 
 // Обработка начала многострочного ответа (+CMGR/+CMGL)
-static void sim900d_start_multiline_response(const char *prefix, const char *p, int foundIndex, char **saveptr) {
+static bool sim900d_start_multiline_response(const char *prefix, const char *p, int foundIndex, char **saveptr) {
 #ifdef SIM900D_VERBOSE
   ESP_LOGV(TAG, "Start multiline");
 #endif
-  currentState = STATE_ACCUMULATING_MULTILINE;
   multilineBuffer[0] = '\0';
   currentHandler = handlerTable[foundIndex];
 
@@ -486,14 +479,18 @@ static void sim900d_start_multiline_response(const char *prefix, const char *p, 
     multilineBuffer[0] = '\0';
   }
 
+  bool result = false;
   // Если после заголовка сразу идёт OK/ERROR, обработаем это тут же
   char *next = strtok_r(NULL, "\r\n", saveptr);
   while (next) {
-    if (sim900d_accumulate_multiline(next)) {
+    result = sim900d_accumulate_multiline(next);
+    if (result) {
       break;
     }
     next = strtok_r(NULL, "\r\n", saveptr);
   }
+
+  return result;
 }
 
 parse_state_t sim900d_parse_line(const char *line) {
@@ -503,6 +500,7 @@ parse_state_t sim900d_parse_line(const char *line) {
 
   sim900d_parser_sms_mode(&(currentParams.sms_mode), currentParams.sms_mode, false);
 
+  static parse_state_t resultState = PARSE_STATE_DONE;
   // Буфер для одной строки (максимум 512 символов)
   char local_line[513];
   size_t line_len = strnlen(line, 512);
@@ -521,10 +519,13 @@ parse_state_t sim900d_parse_line(const char *line) {
 #endif
 
     // Если аккумулируем многострочный ответ
-    if (currentState == STATE_ACCUMULATING_MULTILINE) {
+    if (resultState == PARSE_STATE_IN_PROGRESS) {
       if (sim900d_accumulate_multiline(str)) {
         // завершили аккумулирование
-        currentState = STATE_IDLE;
+        resultState = PARSE_STATE_DONE;
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "currentState 1: \"%d\"", resultState);
+#endif
       }
       // продолжаем разбор следующих строк
       str = strtok_r(NULL, "\r\n", &saveptr);
@@ -542,11 +543,17 @@ parse_state_t sim900d_parse_line(const char *line) {
         p++;
 
       if (strcmp(prefix, SIM900D_RESP_CMGR) == 0 || strcmp(prefix, SIM900D_RESP_CMGL) == 0) {
-        sim900d_start_multiline_response(prefix, p, foundIndex, &saveptr);
+        resultState = sim900d_start_multiline_response(prefix, p, foundIndex, &saveptr) ? PARSE_STATE_DONE : PARSE_STATE_IN_PROGRESS;
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "currentState 2: \"%d\"", resultState);
+#endif
         break; // После обработки многострочного ответа выходим
       } else {
+        resultState = PARSE_STATE_DONE;
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "currentState 3: \"%d\"", resultState);
+#endif
         sim900d_handle_singleline_response(p);
-        currentState = STATE_IDLE;
         // Проверка последующих строк для однострочного ответа
         char *next = strtok_r(NULL, "\r\n", &saveptr);
         currentParams.result = false;
@@ -563,7 +570,10 @@ parse_state_t sim900d_parse_line(const char *line) {
     }
     str = strtok_r(NULL, "\r\n", &saveptr);
   }
-  if (currentState == STATE_IDLE) {
+  if (resultState == PARSE_STATE_DONE) {
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "currentState 4: \"%d\"", resultState);
+#endif
     sim900d_handler_task_msg_ptr_t msg_ptr;
 
     if (reusable_msg && xQueueIsQueueEmptyFromISR(sim900d_handler_queue)) {
@@ -588,7 +598,11 @@ parse_state_t sim900d_parse_line(const char *line) {
     }
   }
 
-  return currentState == STATE_IDLE ? PARSE_STATE_DONE : PARSE_STATE_IN_PROGRESS;
+#ifdef SIM900D_VERBOSE
+  ESP_LOGV(TAG, "currentState 5: \"%d\"", resultState);
+#endif
+
+  return resultState;
 }
 
 esp_err_t sim900d_register_handler(const char *prefix, Sim900dHandler handler) {
@@ -651,7 +665,6 @@ esp_err_t sim900d_parser_init() {
 #endif
 
   handlerCount = 0;
-  currentState = STATE_IDLE;
   currentHandler = NULL;
   multilineBuffer[0] = '\0';
   for (int i = 0; i < MAX_HANDLERS; i++) {
