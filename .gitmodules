@@ -1,0 +1,3 @@
+[submodule "simControlEsp/esp_components"]
+	path = simControlEsp/esp_components
+	url = https://github.com/AndyKorg/esp_components
