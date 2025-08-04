@@ -13,9 +13,9 @@
 #define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
 #include "esp_log.h"
 
-#include "..\esp_components\sim900d_uart\include\sim900d_uart.h"
 #include "console.h"
-
+#include "sim900d_uart.h"
+#include "wifi_module.h"
 
 #define SIM900D_UART_NUM UART_NUM_1
 #define SIM900D_UART_TX GPIO_NUM_17
@@ -25,6 +25,21 @@
 #define SIM900D_RI GPIO_NUM_33
 
 static const char *TAG = "main";
+
+void wifi_ip_disconnected_handler(void) { web_server_stop(); }
+
+void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
+  static esp_ip4_addr_t ip_current = {.addr = 0};
+  if (mode == WIFI_MODE_STA) {
+    //		ota_check_on_server();
+  }
+  if (ip_current.addr != ip.addr) {
+    ESP_LOGV(TAG, "got new IP, web server restart");
+    ip_current = ip;
+    web_server_stop();
+  }
+  web_server_start(ip);
+}
 
 static esp_err_t sms_received_callback(const sms_message_t *sms) {
   printf("SMS received! Index: %d, From: %s, Status: %s\n", sms->index, sms->sender, sms->status);
@@ -139,5 +154,14 @@ void app_main(void) {
     }
   } else {
     ESP_LOGE(TAG, "Failed to initialize SIM900D UART");
+  }
+
+  wifi_init(wifi_ip_connected_handler, wifi_ip_disconnected_handler);
+
+  wifi_mode_start_t wifi_mode = wifi_is_sta_param() == ESP_OK ? WIFI_START_STA : WIFI_START_AP;
+  if (wifi_start(wifi_mode) == ESP_OK) {
+    ESP_LOGI(TAG, "WiFi started mode %d", wifi_mode);
+  } else {
+    ESP_LOGE(TAG, "Failed to start WiFi");
   }
 }

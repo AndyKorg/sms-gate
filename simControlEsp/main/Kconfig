@@ -1,0 +1,29 @@
+menu "LED smart"
+	menu "Hardware setting"
+		choice CIRCUIT_VERSION
+			prompt "Circuit diagram version."
+			help
+				Printed on the PCB from the component installation side.
+				v.0.1 - Started version.
+			config CIRCUIT_V1
+				boolean "ver. 0.1"
+		endchoice
+	endmenu
+    config SOFTWARE_VERSION
+        string "Software version"
+        help
+            Version software. Maximum three digit.
+	menu "AP setting"
+		config AP_PARAM_SSID_NAME
+			string "ssid"
+			help
+				Access point name.
+				The access point is turned on if the station cannot connect to the external access point.
+				no more than 32 ASCII characters
+				if empty, the network name will begin with ESP_ and a hexadecimal number.
+		config AP_PARAM_PASWRD_NAME
+			string ""
+			help
+				Access point password.
+	endmenu
+endmenu

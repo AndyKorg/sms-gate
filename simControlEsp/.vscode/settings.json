@@ -17,7 +17,10 @@
     "esp_flash.h": "c",
     "esp_err.h": "c",
     "sim900d_uart_internal.h": "c",
-    "task.h": "c"
+    "task.h": "c",
+    "esp_wifi_types.h": "c",
+    "esp_wifi_types_generic.h": "c",
+    "ip4_addr.h": "c"
   },
   "idf.flashType": "UART",
   "idf.portWin": "COM15",

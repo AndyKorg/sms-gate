@@ -6,4 +6,6 @@ idf_component_register(SRCS
                         nvs_flash 
                         console
                         driver
-                    INCLUDE_DIRS "")
+                        sim900d_uart
+                        wifi_start
+                    INCLUDE_DIRS ".")
