@@ -14,8 +14,12 @@
 #include "esp_log.h"
 
 #include "console.h"
+#include "drivers/wifi_module.h"
+#include "http_srv.h"
+#include "params.h"
+#include "version.h"
 #include "sim900d_uart.h"
-#include "wifi_module.h"
+
 
 #define SIM900D_UART_NUM UART_NUM_1
 #define SIM900D_UART_TX GPIO_NUM_17
@@ -23,6 +27,8 @@
 #define SIM900D_PWRKEY GPIO_NUM_23
 #define SIM900D_STATUS GPIO_NUM_22
 #define SIM900D_RI GPIO_NUM_33
+
+#define VERSION_PARAM "simCtrl_ver" // version application parameter name on the http-page
 
 static const char *TAG = "main";
 
@@ -61,6 +67,12 @@ static void network_status_callback(bool registered) {
   if (registered) {
     sim900d_network_monitor_start(60 * 1000);
   }
+}
+
+// version on html page
+esp_err_t read_version_param(const paramName_t paramName, char *value, size_t maxLen) {
+  sprintf(value, "%s", version_app());
+  return ESP_OK;
 }
 
 /// @brief Проверка причины перезагрузки
@@ -122,6 +134,25 @@ void app_main(void) {
   reboot_reason_check();
   console_start();
 
+  // Можно вызывать много раз, главное вызвать
+  esp_event_loop_create_default();
+
+  if (!web_server_init()) {
+    ESP_LOGE(TAG, "Failed init web server!");
+  }
+
+  paramReg(VERSION_PARAM, version_app_len() + 1, read_version_param, NULL, NULL);
+
+  wifi_init(wifi_ip_connected_handler, wifi_ip_disconnected_handler);
+
+  wifi_mode_start_t wifi_mode = wifi_is_sta_param() == ESP_OK ? WIFI_START_STA : WIFI_START_AP;
+  esp_err_t tmp = wifi_start(wifi_mode);
+  if (tmp == ESP_OK) {
+    ESP_LOGI(TAG, "WiFi started mode %s", wifi_mode == WIFI_START_AP ? "soft AP": "Station");
+  } else {
+    ESP_LOGE(TAG, "Failed to start WiFi %s", esp_err_to_name(tmp));
+  }
+
   static const uart_config_t sim900d_uart_cfg = {.baud_rate = 9600,
                                                  .data_bits = UART_DATA_8_BITS,
                                                  .parity = UART_PARITY_DISABLE,
@@ -154,14 +185,5 @@ void app_main(void) {
     }
   } else {
     ESP_LOGE(TAG, "Failed to initialize SIM900D UART");
-  }
-
-  wifi_init(wifi_ip_connected_handler, wifi_ip_disconnected_handler);
-
-  wifi_mode_start_t wifi_mode = wifi_is_sta_param() == ESP_OK ? WIFI_START_STA : WIFI_START_AP;
-  if (wifi_start(wifi_mode) == ESP_OK) {
-    ESP_LOGI(TAG, "WiFi started mode %d", wifi_mode);
-  } else {
-    ESP_LOGE(TAG, "Failed to start WiFi");
   }
 }

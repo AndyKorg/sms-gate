@@ -20,7 +20,8 @@
     "task.h": "c",
     "esp_wifi_types.h": "c",
     "esp_wifi_types_generic.h": "c",
-    "ip4_addr.h": "c"
+    "ip4_addr.h": "c",
+    "console.h": "c"
   },
   "idf.flashType": "UART",
   "idf.portWin": "COM15",

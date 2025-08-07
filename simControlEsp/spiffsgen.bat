@@ -1,0 +1,1 @@
+python C:\Users\Admin\esp\v5.4.1\esp-idf\components\spiffs\spiffsgen.py 1048576 "F:\homeMade\Projects\Sim900D\soft\simControlEsp\html" web.bin

@@ -1,4 +1,4 @@
-menu "LED smart"
+menu "GSM-WiFi-Gate"
 	menu "Hardware setting"
 		choice CIRCUIT_VERSION
 			prompt "Circuit diagram version."
