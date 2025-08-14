@@ -1,11 +1,12 @@
+#include "esp_log.h"
 #include "unity.h"
 
 void app_main(void) {
-    UNITY_BEGIN();
-    // Запускаем тест по имени
-    unity_run_test_by_name("PDU Parser Test");
-    unity_run_test_by_name("Simple Parser Test");
-    UNITY_END();
+  UNITY_BEGIN();
+  unity_run_test_by_name("PDU Parser Test");
+  unity_run_test_by_name("Simple Parser Test");
+  unity_run_test_by_name("PDU Parser Test continue OK");
+  UNITY_END();
 }
 
 // Если нужен интерактивный режим, то нужно добавить
@@ -29,4 +30,3 @@ void app_main(void) {
 
 //     unity_run_tests_by_name(test_names, test_funcs, 2);
 // }
-

@@ -5,8 +5,12 @@ idf_component_register(
     INCLUDE_DIRS 
         "."
         "../../esp_components/sim900d_uart/include"    # Исправленный путь
+    REQUIRES
+        unity
+        driver
+        nvs_flash
     PRIV_REQUIRES 
         spi_flash 
-        unity 
         sim900d_uart
+        esp_timer
 )

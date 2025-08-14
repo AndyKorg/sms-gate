@@ -11,5 +11,8 @@ idf_component_register(SRCS
                         params
                         esp_wifi
                         http_server
+                        json
                         version
-                    INCLUDE_DIRS ".")
+                        sms_gateway
+                    INCLUDE_DIRS "."
+                    )

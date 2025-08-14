@@ -17,9 +17,11 @@
 #include "drivers/wifi_module.h"
 #include "http_srv.h"
 #include "params.h"
-#include "version.h"
 #include "sim900d_uart.h"
-
+#include "sms_assembler.h"
+#include "sms_telegram_handler.h"
+#include "telegram_bot_nvs.h"
+#include "version.h"
 
 #define SIM900D_UART_NUM UART_NUM_1
 #define SIM900D_UART_TX GPIO_NUM_17
@@ -29,9 +31,96 @@
 #define SIM900D_RI GPIO_NUM_33
 
 #define VERSION_PARAM "simCtrl_ver" // version application parameter name on the http-page
+#define TELERGAMM_TEST_CMD  "tlg_test"
 
 static const char *TAG = "main";
 
+/**
+ * Диспетчер шлюза
+ */
+esp_err_t sms_system_init(void) {
+  ESP_LOGI(TAG, "🚀 init sms dispatcher...");
+
+  // 1. Инициализация базового ассемблера SMS
+  sms_assembler_config_t assembler_config = {.concat_timeout_ms = 60000,
+                                             .auto_cleanup_enabled = true,
+                                             .priority_queue_enabled = true,
+                                             .default_priority = SMS_PRIORITY_NORMAL,
+                                             .format_enhancement = true};
+
+  esp_err_t ret = sms_assembler_init(&assembler_config);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "sms ass init error: %s", esp_err_to_name(ret));
+    return ret;
+  }
+
+  // 2. Инициализация Telegram обработчика
+  tg_bot_load_all_params();
+  telegram_config_t telegram_config = {.bot_token = "",
+                                       .chat_id = "",
+                                       .retry_enabled = true,
+                                       .max_retries = 3,
+                                       .retry_delay_ms = 5000,
+                                       .format_markdown = true,
+                                       .add_timestamps = true,
+                                       .priority_notifications = true};
+
+  strncpy(telegram_config.bot_token, tg_bot_get_token(), sizeof(telegram_config.bot_token) - 1);
+  strncpy(telegram_config.chat_id, tg_bot_get_chat_id(), sizeof(telegram_config.chat_id) - 1);
+  ESP_LOGI(TAG, "t: %s id: %s", telegram_config.bot_token, telegram_config.chat_id);
+  ret = sms_telegram_handler_init(&telegram_config);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Telegram init error: %s", esp_err_to_name(ret));
+    return ret;
+  }
+
+  // 3. Регистрация обработчиков в ассемблере
+  ret = sms_assembler_register_handler(SMS_HANDLER_TELEGRAM, sms_telegram_handler_process);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Telegram registred error: %s", esp_err_to_name(ret));
+    return ret;
+  }
+
+  // // 4. Регистрация дополнительных обработчиков (опционально)
+  // sms_assembler_register_handler(SMS_HANDLER_EMAIL, sms_email_handler_process);
+  // sms_assembler_register_handler(SMS_HANDLER_WEBHOOK, sms_webhook_handler_process);
+  // sms_assembler_register_handler(SMS_HANDLER_FILE, sms_file_handler_process);
+
+  // // 5. Настройка приоритетов для конкретных отправителей
+  // sms_assembler_set_sender_priority("+7900123456", SMS_PRIORITY_HIGH);    // Важный номер
+  // sms_assembler_set_sender_priority("+7800000000", SMS_PRIORITY_URGENT);  // Критичный номер
+
+  // 6. Настройка маски обработчиков для разных отправителей
+  // bool telegram_only[SMS_HANDLER_MAX] = {true, false, false, false, false}; // Только Telegram
+  // bool all_handlers[SMS_HANDLER_MAX] = {true, true, true, true, false};     // Все кроме custom
+  // bool file_only[SMS_HANDLER_MAX] = {false, false, false, true, false};    // Только файл
+
+  // sms_assembler_set_default_handlers("+7900123456", telegram_only);  // Важные SMS только в Telegram
+  // sms_assembler_set_default_handlers("+7901000000", all_handlers);   // Обычные SMS везде
+  // sms_assembler_set_default_handlers("+7902000000", file_only);      // Лог SMS только в файл
+
+  // 7. Запуск диспетчера
+  ret = sms_assembler_start_dispatcher(5); // Приоритет задачи 5
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "sms dispatcher start error: %s", esp_err_to_name(ret));
+    return ret;
+  }
+
+  ESP_LOGI(TAG, "✅ sms dispatcher start OK");
+  return ESP_OK;
+}
+
+/**
+ * Тестовое сообщение телеграмм-боту
+ */
+esp_err_t teegram_send_test_handler(void) {
+  sms_telegram_handler_test_send(NULL);
+  return ESP_OK;
+}
+
+/**
+ * Net обработчики
+ */
 void wifi_ip_disconnected_handler(void) { web_server_stop(); }
 
 void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
@@ -47,21 +136,6 @@ void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
   web_server_start(ip);
 }
 
-static esp_err_t sms_received_callback(const sms_message_t *sms) {
-  printf("SMS received! Index: %d, From: %s, Status: %s\n", sms->index, sms->sender, sms->status);
-  printf("Text: %s\n", sms->text);
-  if (sms->pdu_mode) {
-    printf("Многочастное: %s\n", sms->is_concat ? "Да" : "Нет");
-    if (sms->is_concat) {
-      printf("  Идентификатор группы: %d\n", sms->concat_ref);
-      printf("  Всего частей: %d\n", sms->concat_total);
-      printf("  Номер этой части: %d\n", sms->concat_seq);
-    }
-    printf("Центр сообщений: %s\n", sms->smsc[0] ? sms->smsc : "(пусто)");
-  }
-  return ESP_OK;
-}
-
 static void network_status_callback(bool registered) {
   ESP_LOGV(TAG, "network status %d", registered);
   if (registered) {
@@ -69,10 +143,50 @@ static void network_status_callback(bool registered) {
   }
 }
 
-// version on html page
+/**
+ * Параметры системы
+ * version on html page
+ */
 esp_err_t read_version_param(const paramName_t paramName, char *value, size_t maxLen) {
   sprintf(value, "%s", version_app());
   return ESP_OK;
+}
+
+/**
+ * Задача мониторинга системы
+ */
+void sms_system_monitor_task(void *pvParameters) {
+  const int monitor_interval_ms = 30000; // 30 секунд
+
+  ESP_LOGI(TAG, "📊 Запуск мониторинга SMS системы");
+
+  while (1) {
+    vTaskDelay(pdMS_TO_TICKS(monitor_interval_ms));
+
+    ESP_LOGI(TAG, "📊 === МОНИТОРИНГ SMS СИСТЕМЫ ===");
+
+    // Статистика ассемблера
+    sms_assembler_print_stats();
+
+    ESP_LOGI(TAG, "");
+
+    // Статистика Telegram обработчика
+    sms_telegram_handler_print_stats();
+
+    // Проверяем свободное место в очереди
+    int free_space = sms_assembler_get_queue_free_space();
+    if (free_space < 5) {
+      ESP_LOGW(TAG, "⚠️ Очередь почти заполнена! Свободно: %d слотов", free_space);
+    }
+
+    // Принудительная очистка устаревших SMS
+    int cleaned = sms_assembler_cleanup_expired();
+    if (cleaned > 0) {
+      ESP_LOGW(TAG, "🗑️ Очищено устаревших SMS групп: %d", cleaned);
+    }
+
+    ESP_LOGI(TAG, "📊 === КОНЕЦ МОНИТОРИНГА ===");
+  }
 }
 
 /// @brief Проверка причины перезагрузки
@@ -139,19 +253,33 @@ void app_main(void) {
 
   if (!web_server_init()) {
     ESP_LOGE(TAG, "Failed init web server!");
+    return;
   }
 
   paramReg(VERSION_PARAM, version_app_len() + 1, read_version_param, NULL, NULL);
+  if (tg_bot_register_params() != ESP_OK) {
+    ESP_LOGE(TAG, "tg param reg failed");
+    return;
+  }
 
   wifi_init(wifi_ip_connected_handler, wifi_ip_disconnected_handler);
 
   wifi_mode_start_t wifi_mode = wifi_is_sta_param() == ESP_OK ? WIFI_START_STA : WIFI_START_AP;
   esp_err_t tmp = wifi_start(wifi_mode);
   if (tmp == ESP_OK) {
-    ESP_LOGI(TAG, "WiFi started mode %s", wifi_mode == WIFI_START_AP ? "soft AP": "Station");
+    ESP_LOGI(TAG, "WiFi started mode %s", wifi_mode == WIFI_START_AP ? "soft AP" : "Station");
   } else {
     ESP_LOGE(TAG, "Failed to start WiFi %s", esp_err_to_name(tmp));
+    return;
   }
+
+  tmp = sms_system_init();
+  if (tmp != ESP_OK) {
+    ESP_LOGE(TAG, "Failed init to sms dispatcher");
+    return;
+  }
+
+  paramReg(TELERGAMM_TEST_CMD, 1, NULL, NULL, teegram_send_test_handler);
 
   static const uart_config_t sim900d_uart_cfg = {.baud_rate = 9600,
                                                  .data_bits = UART_DATA_8_BITS,
@@ -174,7 +302,7 @@ void app_main(void) {
       int baud = sim900d_uart_autobaud(1000);
       if (baud > 0) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
-        sim900d_sms_set_callback(sms_received_callback);
+        sim900d_sms_set_callback(sms_assembler_process_incoming);
         sim900d_network_status_set_callback(network_status_callback);
         sim900d_service_start(SIM900S_SMS_MODE_PDU);
       } else {
@@ -186,4 +314,6 @@ void app_main(void) {
   } else {
     ESP_LOGE(TAG, "Failed to initialize SIM900D UART");
   }
+
+  // xTaskCreate(sms_system_monitor_task, "sms_monitor", 4096, NULL, 3, NULL);
 }

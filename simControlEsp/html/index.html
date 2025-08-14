@@ -1,27 +1,62 @@
 <html>
-    <head>
-        <meta http-equiv="Content-type" content="text/html; charset=utf-8">
-        <title>Setting</title>
-    </head>
-    <body>
-        <form method="post" action="/saveOK.html">
-            <h4>WiFi Net</h4>
-            <p>
-                Name net<br>
-                <input name="wifi_st_ssid" value="~wifi_st_ssid~">
-                <p>
-                    password<br>
-                    <input name="wifi_st_psw" type="password" value="~wifi_st_psw~">
-                    <br>
-                    <br>
-                    <input type="submit" value="Save">
-                </p>
-        </form>
-		<form enctype="multipart/form-data" method="post">
-			<p>Обновление прошивки до версии ~ota_fn~</p>
-			<p><input type="file" name="ota_file" accept="application/octet-stream">
-			<input type="submit" value="Upload"></p>
-		</form>	
-        ~simCtrl_ver~
-	</body>
+
+<head>
+    <meta http-equiv="Content-type" content="text/html; charset=utf-8">
+    <title>Setting</title>
+</head>
+
+<body>
+    <form method="post" action="/saveOK.html">
+        <h4>WiFi Net</h4>
+        <p>
+            Name net<br>
+            <input name="wifi_st_ssid" value="~wifi_st_ssid~">
+        </p>
+        <p>
+            password<br>
+            <input name="wifi_st_psw" type="password" value="~wifi_st_psw~">
+        </p>
+        <br>
+        <input type="submit" value="Save">
+    </form>
+
+    <br>
+    <hr>
+    <br>
+
+    <form method="post" action="/saveOK.html">
+        <h4>Telegram Bot Settings</h4>
+        <p>
+            Bot Token<br>
+            <input name="bot_token" type="text" value="~bot_token~" style="width: 300px;"
+                placeholder="Enter Telegram bot token">
+        </p>
+        <p>
+            Chat ID<br>
+            <input name="chat_id" type="text" value="~chat_id~" placeholder="Enter Telegram chat ID">
+        </p>
+        <br>
+        <input type="submit" value="Save">
+    </form>
+
+    <form method="post" action="/saveOK.html" style="margin-top: 10px;">
+        <input type="hidden" name="tlg_test" value="1">
+        <input type="submit" value="Test">
+    </form>
+
+    <br>
+    <hr>
+    <br>
+
+    <form enctype="multipart/form-data" method="post">
+        <p>Обновление прошивки до версии ~ota_fn~</p>
+        <p>
+            <input type="file" name="ota_file" accept="application/octet-stream">
+            <input type="submit" value="Upload">
+        </p>
+    </form>
+
+    ~simCtrl_ver~
+</body>
+
 </html>
