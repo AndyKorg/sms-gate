@@ -45,8 +45,7 @@ esp_err_t sms_system_init(void) {
   sms_assembler_config_t assembler_config = {.concat_timeout_ms = 60000,
                                              .auto_cleanup_enabled = true,
                                              .priority_queue_enabled = true,
-                                             .default_priority = SMS_PRIORITY_NORMAL,
-                                             .format_enhancement = true};
+                                             .default_priority = SMS_PRIORITY_NORMAL};
 
   esp_err_t ret = sms_assembler_init(&assembler_config);
   if (ret != ESP_OK) {
@@ -62,7 +61,7 @@ esp_err_t sms_system_init(void) {
                                        .max_retries = 3,
                                        .retry_delay_ms = 5000,
                                        .format_markdown = true,
-                                       .add_timestamps = true,
+                                       .add_timestamps = false,
                                        .priority_notifications = true};
 
   strncpy(telegram_config.bot_token, tg_bot_get_token(), sizeof(telegram_config.bot_token) - 1);
