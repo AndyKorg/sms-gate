@@ -23,6 +23,8 @@
 #include "telegram_bot_nvs.h"
 #include "version.h"
 
+#include "sim900d_ussd.h"
+
 #define SIM900D_UART_NUM UART_NUM_1
 #define SIM900D_UART_TX GPIO_NUM_17
 #define SIM900D_UART_RX GPIO_NUM_16
@@ -135,10 +137,35 @@ void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
   web_server_start(ip);
 }
 
+/**
+ * Однократная задача проверки баланса
+ */
+void balance_check_task(void *pvParameters) {
+  ESP_LOGI(TAG, "💰 Запуск однократной проверки баланса");
+  
+  // Ждем инициализации сети
+  vTaskDelay(pdMS_TO_TICKS(10000));
+  
+  // Проверяем баланс
+  esp_err_t ret = sim900d_ussd_get_balance();
+  if (ret == ESP_OK) {
+    ESP_LOGI(TAG, "✅ Запрос баланса отправлен");
+  } else {
+    ESP_LOGE(TAG, "❌ Ошибка запроса баланса: %s", esp_err_to_name(ret));
+  }
+  
+  ESP_LOGI(TAG, "💰 Задача проверки баланса завершена");
+  
+  // Удаляем задачу после выполнения
+  vTaskDelete(NULL);
+}
+
 static void network_status_callback(bool registered) {
   ESP_LOGV(TAG, "network status %d", registered);
   if (registered) {
     sim900d_network_monitor_start(60 * 1000);
+    // Запускаем однократную задачу проверки баланса
+    xTaskCreate(balance_check_task, "balance_check", 2048, NULL, 2, NULL);
   }
 }
 
@@ -301,6 +328,9 @@ void app_main(void) {
       int baud = sim900d_uart_autobaud(1000);
       if (baud > 0) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
+
+        sim900d_ussd_register_command(USSD_TYPE_BALANCE, "*100#");
+
         sim900d_sms_set_callback(sms_assembler_process_incoming);
         sim900d_network_status_set_callback(network_status_callback);
         sim900d_service_start(SIM900S_SMS_MODE_PDU);

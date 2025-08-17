@@ -11,7 +11,7 @@ static void print_test_separator(const char *test_name) {
 void app_main(void) {
     UNITY_BEGIN();
     
-    // Существующие тесты
+    // PDU тесты
     print_test_separator("PDU Parser Test");
     unity_run_test_by_name("PDU Parser Test");
     
@@ -21,7 +21,7 @@ void app_main(void) {
     print_test_separator("PDU Parser Test continue OK");
     unity_run_test_by_name("PDU Parser Test continue OK");
     
-    // Новые тесты для обработки ошибок
+    // Тесты для обработки ошибок
     print_test_separator("Simple Response Error Test");
     unity_run_test_by_name("Simple Response Error Test");
     
@@ -41,7 +41,23 @@ void app_main(void) {
     unity_run_test_by_name("Empty Response Error Test");
 
     print_test_separator("Mixed OK and ERROR Test");
-    unity_run_test_by_name("Empty Response Error Test");
+    unity_run_test_by_name("Mixed OK and ERROR Test");
+
+    // Тесты для USSD
+    print_test_separator("USSD Response UCS2 Test");
+    unity_run_test_by_name("USSD Response UCS2 Test");
+    
+    print_test_separator("USSD Response Text Test");
+    unity_run_test_by_name("USSD Response Text Test");
+    
+    print_test_separator("USSD Response Error Status Test");
+    unity_run_test_by_name("USSD Response Error Status Test");
+    
+    print_test_separator("USSD Response Empty Message Test");
+    unity_run_test_by_name("USSD Response Empty Message Test");
+    
+    print_test_separator("USSD Response Insufficient Params Test");
+    unity_run_test_by_name("USSD Response Insufficient Params Test");
 
     // print_test_separator("Timeout Simulation Test");
     // unity_run_test_by_name("Timeout Simulation Test");
