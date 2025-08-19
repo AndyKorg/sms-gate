@@ -12,9 +12,12 @@ void app_main(void) {
     UNITY_BEGIN();
     
     // PDU тесты
-    print_test_separator("PDU Parser Test");
-    unity_run_test_by_name("PDU Parser Test");
+    print_test_separator("PDU Parser Test Latin");
+    unity_run_test_by_name("PDU Parser Test Latin");
     
+    print_test_separator("PDU Parser Test Rus");
+    unity_run_test_by_name("PDU Parser Test Rus");
+
     print_test_separator("Simple Parser Test");
     unity_run_test_by_name("Simple Parser Test");
     

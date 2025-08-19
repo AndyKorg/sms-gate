@@ -23,7 +23,7 @@
 #include "telegram_bot_nvs.h"
 #include "version.h"
 
-#include "sim900d_ussd.h"
+#include "ussd_cmd.h"
 
 #define SIM900D_UART_NUM UART_NUM_1
 #define SIM900D_UART_TX GPIO_NUM_17
@@ -33,7 +33,7 @@
 #define SIM900D_RI GPIO_NUM_33
 
 #define VERSION_PARAM "simCtrl_ver" // version application parameter name on the http-page
-#define TELERGAMM_TEST_CMD  "tlg_test"
+#define TELERGAMM_TEST_CMD "tlg_test"
 
 static const char *TAG = "main";
 
@@ -68,7 +68,6 @@ esp_err_t sms_system_init(void) {
 
   strncpy(telegram_config.bot_token, tg_bot_get_token(), sizeof(telegram_config.bot_token) - 1);
   strncpy(telegram_config.chat_id, tg_bot_get_chat_id(), sizeof(telegram_config.chat_id) - 1);
-  ESP_LOGI(TAG, "t: %s id: %s", telegram_config.bot_token, telegram_config.chat_id);
   ret = sms_telegram_handler_init(&telegram_config);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Telegram init error: %s", esp_err_to_name(ret));
@@ -141,11 +140,9 @@ void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
  * Однократная задача проверки баланса
  */
 void balance_check_task(void *pvParameters) {
-  ESP_LOGI(TAG, "💰 Запуск однократной проверки баланса");
-  
   // Ждем инициализации сети
   vTaskDelay(pdMS_TO_TICKS(10000));
-  
+
   // Проверяем баланс
   esp_err_t ret = sim900d_ussd_get_balance();
   if (ret == ESP_OK) {
@@ -153,19 +150,20 @@ void balance_check_task(void *pvParameters) {
   } else {
     ESP_LOGE(TAG, "❌ Ошибка запроса баланса: %s", esp_err_to_name(ret));
   }
-  
-  ESP_LOGI(TAG, "💰 Задача проверки баланса завершена");
-  
+
   // Удаляем задачу после выполнения
   vTaskDelete(NULL);
 }
 
 static void network_status_callback(bool registered) {
-  ESP_LOGV(TAG, "network status %d", registered);
+  static bool status = false;
+  if (status != registered) {
+    ESP_LOGI(TAG, "change network status to %d", registered);
+    status = registered;
+  }
   if (registered) {
     sim900d_network_monitor_start(60 * 1000);
-    // Запускаем однократную задачу проверки баланса
-    xTaskCreate(balance_check_task, "balance_check", 2048, NULL, 2, NULL);
+    ussd_cmd_start_balance_check(10000);
   }
 }
 
@@ -328,12 +326,13 @@ void app_main(void) {
       int baud = sim900d_uart_autobaud(1000);
       if (baud > 0) {
         ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
-
-        sim900d_ussd_register_command(USSD_TYPE_BALANCE, "*100#");
-
         sim900d_sms_set_callback(sms_assembler_process_incoming);
         sim900d_network_status_set_callback(network_status_callback);
         sim900d_service_start(SIM900S_SMS_MODE_PDU);
+        tmp = ussd_cmd_init();
+        if (tmp != ESP_OK) {
+          ESP_LOGE(TAG, "Failed to init USSD commands module %s", esp_err_to_name(tmp));
+        }
       } else {
         ESP_LOGE(TAG, "Failed auto-baud SIM900D");
       }

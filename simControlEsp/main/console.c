@@ -11,6 +11,8 @@
 #include "../esp_components/sim900d_uart/sim900d_command.h"
 #include "../esp_components/sim900d_uart/sim900d_parser.h"
 #include "../esp_components/sim900d_uart/sim900d_uart_internal.h"
+#include "../esp_components/sim900d_uart/include/sim900d_ussd.h"
+#include "../esp_components/sim900d_uart/include/sim900d_sms_types.h"
 
 #define UART_NUM UART_NUM_0
 #define UART_RX_BUF_SIZE 1024
@@ -91,9 +93,57 @@ static void register_send(void) {
   ESP_ERROR_CHECK(esp_console_cmd_register(&send_cmd));
 }
 
+/*
+ * cmd_ussd - команда для отправки USSD запросов
+ */
+static int cmd_ussd(int argc, char **argv) {
+  if (argc < 2) {
+    printf("Usage: ussd <type_number>\n");
+    printf("Available USSD types:\n");
+    printf("  0 - баланс\n");
+    printf("  1 - номер телефона\n");
+    printf("Ответ придет в телеграм бот\n");
+    return 1;
+  }
+
+  int type_num = atoi(argv[1]);
+  
+  if (type_num >= USSD_TYPE_COUNT) {
+    printf("Error: Invalid USSD type %d\n", type_num);
+    return 1;
+  }
+
+  ussd_type_t type = (ussd_type_t)type_num;
+  
+  printf("Sending USSD request, type: %d\n", type_num);
+  
+  esp_err_t result = sim900d_ussd_send_by_type(type);
+  
+  if (result == ESP_OK) {
+    printf("USSD request sent successfully. Response will be received via SMS callback.\n");
+  } else if (result == ESP_ERR_INVALID_ARG) {
+    printf("Error: USSD command not registered for type %d\n", type_num);
+  } else {
+    printf("Error sending USSD request: %s\n", esp_err_to_name(result));
+  }
+
+  return 0;
+}
+
+static void register_ussd(void) {
+  const esp_console_cmd_t ussd_cmd = {
+      .command = "ussd",
+      .help = "Send USSD request by type",
+      .hint = "<type_number>",
+      .func = &cmd_ussd,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&ussd_cmd));
+}
+
 void register_console_commands() {
   register_parse();
   register_send();
+  register_ussd();
 }
 
 /*----------------------------*
