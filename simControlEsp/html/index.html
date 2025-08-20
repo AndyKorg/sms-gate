@@ -48,8 +48,27 @@
     <hr>
     <br>
 
+    <form method="post" action="/saveOK.html">
+        <h4>Phone</h4>
+        <h5>USSD</h5>
+        <p>
+            Request balance<br>
+            <input name="ussd_balance" type="text" value="~ussd_balance~">
+        </p>
+        <p>
+            Request self phone number<br>
+            <input name="ussd_phone" type="text" value="~ussd_phone~">
+        </p>
+        <br>
+        <input type="submit" value="Save">
+    </form>
+
+    <br>
+    <hr>
+    <br>
+
     <form enctype="multipart/form-data" method="post">
-        <p>Обновление прошивки до версии ~ota_fn~</p>
+        <p>Upgrade software to version ~ota_fn~</p>
         <p>
             <input type="file" name="ota_file" accept="application/octet-stream">
             <input type="submit" value="Upload">

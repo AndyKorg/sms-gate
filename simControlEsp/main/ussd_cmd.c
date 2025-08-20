@@ -28,9 +28,10 @@ static void balance_check_task(void *pvParameters) {
 
 esp_err_t ussd_cmd_init(void) {
 
-  sim900d_ussd_register_command(USSD_TYPE_BALANCE, "*100#");
+  esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
+  sim900d_ussd_register_params();
+  sim900d_ussd_load_all_params();
 
-  // Здесь можно добавить дополнительную инициализацию если нужно
   return ESP_OK;
 }
 
@@ -59,4 +60,5 @@ void ussd_cmd_deinit(void) {
     vTaskDelete(balance_task_handle);
     balance_task_handle = NULL;
   }
+  sim900d_ussd_deinit();
 }
