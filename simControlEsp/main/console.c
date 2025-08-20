@@ -19,6 +19,32 @@
 
 static const char *TAG = "console";
 
+/*----------------------------*
+ *	list
+ *----------------------------*/
+static int get_params_list(int argc, char **argv) {
+	char *name = get_next_param(true);
+	do {
+		if (name) {
+			ESP_LOGI(TAG, "%s", name);
+		}
+		name = get_next_param(false);
+	} while (name);
+	return 0;
+}
+
+static void register_get_params(void) {
+// @formatter:off
+	const esp_console_cmd_t	cmd = {
+		.command = "list",
+		.help = "list parameters registered",
+		.hint = NULL,
+		.func = &get_params_list,
+	};
+// @formatter:on
+	ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 /*
  * cmd_parse
  */
@@ -144,6 +170,7 @@ void register_console_commands() {
   register_parse();
   register_send();
   register_ussd();
+  register_get_params();
 }
 
 /*----------------------------*
