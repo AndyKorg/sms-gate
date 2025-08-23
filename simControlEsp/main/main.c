@@ -59,6 +59,7 @@ esp_err_t sms_system_init(void) {
   tg_bot_load_all_params();
   telegram_config_t telegram_config = {.bot_token = "",
                                        .chat_id = "",
+                                       .user_id = "",
                                        .retry_enabled = true,
                                        .max_retries = 3,
                                        .retry_delay_ms = 5000,
@@ -68,6 +69,7 @@ esp_err_t sms_system_init(void) {
 
   strncpy(telegram_config.bot_token, tg_bot_get_token(), sizeof(telegram_config.bot_token) - 1);
   strncpy(telegram_config.chat_id, tg_bot_get_chat_id(), sizeof(telegram_config.chat_id) - 1);
+  strncpy(telegram_config.user_id, tg_bot_get_user_id_sms(), sizeof(telegram_config.user_id));
   ret = sms_telegram_handler_init(&telegram_config);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Telegram init error: %s", esp_err_to_name(ret));
