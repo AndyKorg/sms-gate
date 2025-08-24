@@ -72,10 +72,20 @@
     <hr>
     <br>
 
+    <form method="post" action="/saveOK.html">
+        <h4>Upgrade Software</h4>
+        <p>
+            OTA Server IP<br>
+            <input name="ota_ip" type="text" value="~ota_ip~" placeholder="Enter OTA server IP address">
+        </p>
+        <br>
+        <input type="submit" value="Save">
+    </form>
+
     <form enctype="multipart/form-data" method="post">
         <p>Upgrade software to version ~ota_fn~</p>
         <p>
-            <input type="file" name="ota_file" accept="application/octet-stream">
+            <input type="file" name="ota_file" accept=".bin,application/octet-stream">
             <input type="submit" value="Upload">
         </p>
     </form>

@@ -10,7 +10,7 @@
 #include <stdio.h>
 
 #undef LOG_LOCAL_LEVEL
-#define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
+#define LOG_LOCAL_LEVEL ESP_LOG_ERROR
 #include "esp_log.h"
 
 #include "console.h"
@@ -22,6 +22,7 @@
 #include "sms_telegram_handler.h"
 #include "telegram_bot_nvs.h"
 #include "version.h"
+#include "ota_client.h"
 
 #include "ussd_cmd.h"
 
@@ -35,7 +36,15 @@
 #define VERSION_PARAM "simCtrl_ver" // version application parameter name on the http-page
 #define TELERGAMM_TEST_CMD "tlg_test"
 
+// OTA Configuration
+#define OTA_CHECK_INTERVAL_HOURS 24        // Интервал проверки обновлений в часах
+#define OTA_TASK_PRIORITY 1                // Самый низкий приоритет
+#define OTA_TASK_STACK_SIZE 4096           // Размер стека для задачи OTA
+
 static const char *TAG = "main";
+
+// Глобальные переменные для OTA
+static TaskHandle_t ota_task_handle = NULL;
 
 /**
  * Диспетчер шлюза
@@ -121,15 +130,115 @@ esp_err_t teegram_send_test_handler(void) {
 }
 
 /**
+ * Обработчик загрузки OTA файла
+ */
+static esp_err_t ota_file_upload_handler(const char *tag_name, const char *buf, const size_t size, const char *file_name) {
+	static esp_ota_handle_t handle = 0;
+
+  // Записываем данные в OTA раздел
+  esp_err_t ret = ota_stream_write(&handle, buf, size);
+  
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "❌ OTA write failed: %s", esp_err_to_name(ret));
+    handle = 0;
+  } else if (size > 0) {
+    ESP_LOGD(TAG, "📝 OTA chunk written: %zu bytes", size);
+  }
+  
+  return ret;
+}
+
+/**
+ * Задача периодической проверки OTA обновлений
+ */
+static void ota_check_task(void *pvParameters) {
+  const TickType_t check_interval = pdMS_TO_TICKS(OTA_CHECK_INTERVAL_HOURS * 60 * 60 * 1000);
+  
+  ESP_LOGD(TAG, "🔄 OTA check task started, interval: %d hours", OTA_CHECK_INTERVAL_HOURS);
+  
+  while (1) {
+    // Ждем подключения к WiFi
+    while (wifi_is_sta_connected() != ESP_OK) {
+      vTaskDelay(pdMS_TO_TICKS(5000)); // Проверяем каждые 5 секунд
+    }
+    
+    ESP_LOGD(TAG, "🔄 Starting OTA update check...");
+    
+    // Проверяем наличие настроек OTA сервера
+    char ota_server_ip[16] = {0};
+    esp_err_t ret = ota_server_adr_read(ota_server_ip);
+    
+    if (ret == ESP_OK && strlen(ota_server_ip) > 0) {
+      ESP_LOGD(TAG, "📡 Checking updates on server: %s", ota_server_ip);
+      
+      // Запускаем проверку обновлений
+      ota_check_on_server();
+      
+      ESP_LOGD(TAG, "✅ OTA check completed");
+    } else {
+      ESP_LOGW(TAG, "⚠️ OTA server not configured, skipping update check");
+    }
+    
+    // Ждем до следующей проверки
+    vTaskDelay(check_interval);
+  }
+}
+
+/**
+ * Запуск задачи периодической проверки OTA
+ */
+static esp_err_t start_ota_check_task(void) {
+  if (ota_task_handle != NULL) {
+    ESP_LOGW(TAG, "OTA check task already running");
+    return ESP_OK;
+  }
+  
+  BaseType_t result = xTaskCreatePinnedToCore(
+    ota_check_task,           // Функция задачи
+    "ota_check",              // Имя задачи
+    OTA_TASK_STACK_SIZE,      // Размер стека
+    NULL,                     // Параметры
+    OTA_TASK_PRIORITY,        // Приоритет (самый низкий)
+    &ota_task_handle,         // Хендл задачи
+    PRO_CPU_NUM               // Ядро (противоположное WiFi)
+  );
+  
+  if (result == pdPASS) {
+    ESP_LOGD(TAG, "✅ OTA check task created successfully");
+    return ESP_OK;
+  } else {
+    ESP_LOGE(TAG, "❌ Failed to create OTA check task");
+    return ESP_FAIL;
+  }
+}
+
+/**
+ * Остановка задачи периодической проверки OTA
+ */
+static void stop_ota_check_task(void) {
+  if (ota_task_handle != NULL) {
+    vTaskDelete(ota_task_handle);
+    ota_task_handle = NULL;
+    ESP_LOGD(TAG, "🛑 OTA check task stopped");
+  }
+}
+
+/**
  * Net обработчики
  */
-void wifi_ip_disconnected_handler(void) { web_server_stop(); }
+void wifi_ip_disconnected_handler(void) { 
+  stop_ota_check_task();
+  web_server_stop(); 
+}
 
 void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
   static esp_ip4_addr_t ip_current = {.addr = 0};
+  
   if (mode == WIFI_MODE_STA) {
-    //		ota_check_on_server();
+    // Запускаем задачу OTA при подключении в режиме Station
+    start_ota_check_task();
   }
+  
   if (ip_current.addr != ip.addr) {
     ESP_LOGV(TAG, "got new IP, web server restart");
     ip_current = ip;
@@ -156,6 +265,33 @@ static void network_status_callback(bool registered) {
  */
 esp_err_t read_version_param(const paramName_t paramName, char *value, size_t maxLen) {
   sprintf(value, "%s", version_app());
+  return ESP_OK;
+}
+
+/**
+ * Чтение IP адреса OTA сервера для отображения на веб-странице
+ */
+esp_err_t read_ota_ip_param(const paramName_t paramName, char *value, size_t maxLen) {
+  esp_err_t ret = ota_server_adr_read(value);
+  if (ret != ESP_OK) {
+    memset(value, 0, maxLen);
+  }
+  return ESP_OK;
+}
+
+/**
+ * Сохранение IP адреса OTA сервера из веб-формы
+ */
+esp_err_t write_ota_ip_param(const paramName_t paramName, const char *value, size_t maxLen) {
+  if (value && strlen(value) > 0) {
+    esp_err_t ret = ota_server_adr_save((char*)value);
+    if (ret == ESP_OK) {
+      ESP_LOGI(TAG, "✅ OTA server IP saved: %s", value);
+    } else {
+      ESP_LOGE(TAG, "❌ Failed to save OTA server IP: %s", esp_err_to_name(ret));
+    }
+    return ret;
+  }
   return ESP_OK;
 }
 
@@ -267,6 +403,29 @@ void app_main(void) {
   if (tg_bot_register_params() != ESP_OK) {
     ESP_LOGE(TAG, "tg param reg failed");
     return;
+  }
+
+  // Инициализация OTA клиента
+  ota_client_cfg_t ota_cfg = {
+    .task_priority = OTA_TASK_PRIORITY + 1,  // Приоритет для загрузки чуть выше чем у периодической проверки
+    .xCoreID = PRO_CPU_NUM,                  // Ядро противоположное WiFi
+    .ota_begin_func = NULL,                  // Не используем callback'и
+    .ota_end_func = NULL
+  };
+  
+  esp_err_t ota_init_ret = ota_init(&ota_cfg);
+  if (ota_init_ret == ESP_OK) {
+    ESP_LOGD(TAG, "✅ OTA client initialized successfully");
+  } else {
+    ESP_LOGW(TAG, "⚠️ OTA client init failed: %s", esp_err_to_name(ota_init_ret));
+  }
+
+  // Регистрация обработчика загрузки OTA файлов
+  esp_err_t ota_reg_ret = web_reg_upload_file_func(OTA_FILE_PARAM, ota_file_upload_handler);
+  if (ota_reg_ret == ESP_OK) {
+    ESP_LOGD(TAG, "✅ OTA file upload handler registered");
+  } else {
+    ESP_LOGE(TAG, "❌ Failed to register OTA upload handler: %s", esp_err_to_name(ota_reg_ret));
   }
 
   wifi_init(wifi_ip_connected_handler, wifi_ip_disconnected_handler);

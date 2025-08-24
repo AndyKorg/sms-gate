@@ -15,5 +15,6 @@ idf_component_register(SRCS
                         json
                         version
                         sms_gateway
+                        ota_client
                     INCLUDE_DIRS "."
                     )
