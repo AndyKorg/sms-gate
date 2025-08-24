@@ -2,9 +2,11 @@ idf_component_register(
     SRCS 
         "test_main.c"
         "../../esp_components/sim900d_uart/test/test_sim900d_parser.c"
+        "../../esp_components/version/test/test_version_parse.c"
     INCLUDE_DIRS 
         "."
         "../../esp_components/sim900d_uart/include"    # Исправленный путь
+        "../../esp_components/version/include"
     REQUIRES
         unity
         driver
@@ -12,5 +14,7 @@ idf_component_register(
     PRIV_REQUIRES 
         spi_flash 
         sim900d_uart
+        version
         esp_timer
+        params
 )
