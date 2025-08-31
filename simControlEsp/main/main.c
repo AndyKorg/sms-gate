@@ -16,13 +16,15 @@
 #include "console.h"
 #include "drivers/wifi_module.h"
 #include "http_srv.h"
+#include "log_spiffs.h"
+#include "ota_client.h"
 #include "params.h"
 #include "sim900d_uart.h"
 #include "sms_assembler.h"
 #include "sms_telegram_handler.h"
+#include "spiffs_manager.h"
 #include "telegram_bot_nvs.h"
 #include "version.h"
-#include "ota_client.h"
 
 #include "ussd_cmd.h"
 
@@ -37,9 +39,9 @@
 #define TELERGAMM_TEST_CMD "tlg_test"
 
 // OTA Configuration
-#define OTA_CHECK_INTERVAL_HOURS 24        // Интервал проверки обновлений в часах
-#define OTA_TASK_PRIORITY 1                // Самый низкий приоритет
-#define OTA_TASK_STACK_SIZE 4096           // Размер стека для задачи OTA
+#define OTA_CHECK_INTERVAL_HOURS 24 // Интервал проверки обновлений в часах
+#define OTA_TASK_PRIORITY 1         // Самый низкий приоритет
+#define OTA_TASK_STACK_SIZE 4096    // Размер стека для задачи OTA
 
 static const char *TAG = "main";
 
@@ -132,19 +134,20 @@ esp_err_t teegram_send_test_handler(void) {
 /**
  * Обработчик загрузки OTA файла
  */
-static esp_err_t ota_file_upload_handler(const char *tag_name, const char *buf, const size_t size, const char *file_name) {
-	static esp_ota_handle_t handle = 0;
+static esp_err_t ota_file_upload_handler(const char *tag_name, const char *buf, const size_t size,
+                                         const char *file_name) {
+  static esp_ota_handle_t handle = 0;
 
   // Записываем данные в OTA раздел
   esp_err_t ret = ota_stream_write(&handle, buf, size);
-  
+
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "❌ OTA write failed: %s", esp_err_to_name(ret));
     handle = 0;
   } else if (size > 0) {
     ESP_LOGD(TAG, "📝 OTA chunk written: %zu bytes", size);
   }
-  
+
   return ret;
 }
 
@@ -153,32 +156,32 @@ static esp_err_t ota_file_upload_handler(const char *tag_name, const char *buf, 
  */
 static void ota_check_task(void *pvParameters) {
   const TickType_t check_interval = pdMS_TO_TICKS(OTA_CHECK_INTERVAL_HOURS * 60 * 60 * 1000);
-  
+
   ESP_LOGD(TAG, "🔄 OTA check task started, interval: %d hours", OTA_CHECK_INTERVAL_HOURS);
-  
+
   while (1) {
     // Ждем подключения к WiFi
     while (wifi_is_sta_connected() != ESP_OK) {
       vTaskDelay(pdMS_TO_TICKS(5000)); // Проверяем каждые 5 секунд
     }
-    
+
     ESP_LOGD(TAG, "🔄 Starting OTA update check...");
-    
+
     // Проверяем наличие настроек OTA сервера
     char ota_server_ip[16] = {0};
     esp_err_t ret = ota_server_adr_read(ota_server_ip);
-    
+
     if (ret == ESP_OK && strlen(ota_server_ip) > 0) {
       ESP_LOGD(TAG, "📡 Checking updates on server: %s", ota_server_ip);
-      
+
       // Запускаем проверку обновлений
       ota_check_on_server();
-      
+
       ESP_LOGD(TAG, "✅ OTA check completed");
     } else {
       ESP_LOGW(TAG, "⚠️ OTA server not configured, skipping update check");
     }
-    
+
     // Ждем до следующей проверки
     vTaskDelay(check_interval);
   }
@@ -192,17 +195,16 @@ static esp_err_t start_ota_check_task(void) {
     ESP_LOGW(TAG, "OTA check task already running");
     return ESP_OK;
   }
-  
-  BaseType_t result = xTaskCreatePinnedToCore(
-    ota_check_task,           // Функция задачи
-    "ota_check",              // Имя задачи
-    OTA_TASK_STACK_SIZE,      // Размер стека
-    NULL,                     // Параметры
-    OTA_TASK_PRIORITY,        // Приоритет (самый низкий)
-    &ota_task_handle,         // Хендл задачи
-    PRO_CPU_NUM               // Ядро (противоположное WiFi)
+
+  BaseType_t result = xTaskCreatePinnedToCore(ota_check_task,      // Функция задачи
+                                              "ota_check",         // Имя задачи
+                                              OTA_TASK_STACK_SIZE, // Размер стека
+                                              NULL,                // Параметры
+                                              OTA_TASK_PRIORITY,   // Приоритет (самый низкий)
+                                              &ota_task_handle,    // Хендл задачи
+                                              PRO_CPU_NUM          // Ядро (противоположное WiFi)
   );
-  
+
   if (result == pdPASS) {
     ESP_LOGD(TAG, "✅ OTA check task created successfully");
     return ESP_OK;
@@ -226,19 +228,19 @@ static void stop_ota_check_task(void) {
 /**
  * Net обработчики
  */
-void wifi_ip_disconnected_handler(void) { 
+void wifi_ip_disconnected_handler(void) {
   stop_ota_check_task();
-  web_server_stop(); 
+  web_server_stop();
 }
 
 void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
   static esp_ip4_addr_t ip_current = {.addr = 0};
-  
+
   if (mode == WIFI_MODE_STA) {
     // Запускаем задачу OTA при подключении в режиме Station
     start_ota_check_task();
   }
-  
+
   if (ip_current.addr != ip.addr) {
     ESP_LOGV(TAG, "got new IP, web server restart");
     ip_current = ip;
@@ -284,7 +286,7 @@ esp_err_t read_ota_ip_param(const paramName_t paramName, char *value, size_t max
  */
 esp_err_t write_ota_ip_param(const paramName_t paramName, const char *value, size_t maxLen) {
   if (value && strlen(value) > 0) {
-    esp_err_t ret = ota_server_adr_save((char*)value);
+    esp_err_t ret = ota_server_adr_save((char *)value);
     if (ret == ESP_OK) {
       ESP_LOGI(TAG, "✅ OTA server IP saved: %s", value);
     } else {
@@ -391,70 +393,142 @@ void app_main(void) {
   reboot_reason_check();
   console_start();
 
-  // Можно вызывать много раз, главное вызвать
-  esp_event_loop_create_default();
+  // ВАЖНО: Сначала инициализируем SPIFFS Manager
+  spiffs_manager_config_t spiffs_manager_cfg = {.partition_count = 1,
+                                                .auto_defrag = true,
+                                                .defrag_threshold_percent = 85,
+                                                .partitions = {
+                                                    {.label = "logs",
+                                                     .base_path = "/logs",
+                                                     .max_files = 20,
+                                                     .format_if_mount_failed = true,
+                                                     .type = SPIFFS_PARTITION_LOGS},
+                                                }};
 
+  esp_err_t ret = spiffs_manager_init(&spiffs_manager_cfg);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to initialize SPIFFS Manager: %s", esp_err_to_name(ret));
+    // НЕ завершаем работу, продолжаем без логирования в файл
+  }
+
+  // КРИТИЧНО: Инициализируем log_spiffs ТОЛЬКО если SPIFFS успешно инициализирован
+  if (ret == ESP_OK) {
+    // Конфигурация логирования в SPIFFS с безопасными настройками
+    log_spiffs_config_t log_config = {
+        .partition_label = spiffs_manager_cfg.partitions[0].label,
+        .base_path = spiffs_manager_cfg.partitions[0].base_path,        // Указываем конкретный путь для файлов
+        .duplicate_to_console = true,    // Дублировать в консоль
+        .emergency_flush_enabled = false // ОТКЛЮЧАЕМ для предотвращения блокировок
+    };
+
+    ESP_LOGI(TAG, "🔧 Initializing log system with partition: %s, path: %s", log_config.partition_label,
+             log_config.base_path);
+
+    esp_err_t log_init_ret = log_spiffs_init(&log_config);
+    if (log_init_ret == ESP_OK) {
+      ESP_LOGI(TAG, "✅ Log SPIFFS initialized successfully");
+
+      // Даем время системе стабилизироваться перед запуском логирования
+      vTaskDelay(pdMS_TO_TICKS(100));
+
+      // Запускаем систему логирования ТОЛЬКО после успешной инициализации
+      esp_err_t log_start_ret = log_spiffs_start();
+      if (log_start_ret == ESP_OK) {
+        ESP_LOGI(TAG, "✅ Log SPIFFS started successfully");
+
+        // Тестовое сообщение для проверки работы
+        ESP_LOGI(TAG, "📝 Log system is operational");
+      } else {
+        ESP_LOGW(TAG, "⚠️ Log SPIFFS start failed: %s, continuing without file logging", esp_err_to_name(log_start_ret));
+        // Деинициализируем при ошибке запуска
+        log_spiffs_deinit();
+      }
+    } else {
+      ESP_LOGW(TAG, "⚠️ Log SPIFFS init failed: %s, continuing without file logging", esp_err_to_name(log_init_ret));
+    }
+  } else {
+    ESP_LOGW(TAG, "⚠️ SPIFFS Manager failed, skipping log_spiffs initialization");
+  }
+
+  // ВАЖНО: Даем время системе логирования полностью инициализироваться
+  vTaskDelay(pdMS_TO_TICKS(200));
+
+  // Создаем default event loop ПОСЛЕ инициализации логирования
+  esp_err_t event_ret = esp_event_loop_create_default();
+  if (event_ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to create event loop: %s", esp_err_to_name(event_ret));
+    return;
+  }
+
+  // Инициализируем веб-сервер ПОСЛЕ логирования
   if (!web_server_init()) {
     ESP_LOGE(TAG, "Failed init web server!");
     return;
   }
 
+  // Регистрируем параметры версии
   paramReg(VERSION_PARAM, version_app_len() + 1, read_version_param, NULL, NULL);
+
+  // Инициализация Telegram параметров
   if (tg_bot_register_params() != ESP_OK) {
     ESP_LOGE(TAG, "tg param reg failed");
     return;
   }
 
-  // Инициализация OTA клиента
-  ota_client_cfg_t ota_cfg = {
-    .task_priority = OTA_TASK_PRIORITY + 1,  // Приоритет для загрузки чуть выше чем у периодической проверки
-    .xCoreID = PRO_CPU_NUM,                  // Ядро противоположное WiFi
-    .ota_begin_func = NULL,                  // Не используем callback'и
-    .ota_end_func = NULL
-  };
-  
+  // Инициализация OTA клиента ПОСЛЕ веб-сервера
+  ota_client_cfg_t ota_cfg = {.task_priority = OTA_TASK_PRIORITY + 1, // Приоритет выше проверки
+                              .xCoreID = PRO_CPU_NUM,                 // Ядро противоположное WiFi
+                              .ota_begin_func = NULL,                 // Не используем callback'и
+                              .ota_end_func = NULL};
+
   esp_err_t ota_init_ret = ota_init(&ota_cfg);
   if (ota_init_ret == ESP_OK) {
-    ESP_LOGD(TAG, "✅ OTA client initialized successfully");
+    ESP_LOGI(TAG, "✅ OTA client initialized successfully");
+
+    // Регистрация обработчика загрузки OTA файлов
+    esp_err_t ota_reg_ret = web_reg_upload_file_func(OTA_FILE_PARAM, ota_file_upload_handler);
+    if (ota_reg_ret == ESP_OK) {
+      ESP_LOGI(TAG, "✅ OTA file upload handler registered");
+    } else {
+      ESP_LOGE(TAG, "❌ Failed to register OTA upload handler: %s", esp_err_to_name(ota_reg_ret));
+    }
   } else {
     ESP_LOGW(TAG, "⚠️ OTA client init failed: %s", esp_err_to_name(ota_init_ret));
   }
 
-  // Регистрация обработчика загрузки OTA файлов
-  esp_err_t ota_reg_ret = web_reg_upload_file_func(OTA_FILE_PARAM, ota_file_upload_handler);
-  if (ota_reg_ret == ESP_OK) {
-    ESP_LOGD(TAG, "✅ OTA file upload handler registered");
-  } else {
-    ESP_LOGE(TAG, "❌ Failed to register OTA upload handler: %s", esp_err_to_name(ota_reg_ret));
-  }
-
+  // Инициализация WiFi ПОСЛЕ всех остальных компонентов
   wifi_init(wifi_ip_connected_handler, wifi_ip_disconnected_handler);
 
   wifi_mode_start_t wifi_mode = wifi_is_sta_param() == ESP_OK ? WIFI_START_STA : WIFI_START_AP;
-  esp_err_t tmp = wifi_start(wifi_mode);
-  if (tmp == ESP_OK) {
-    ESP_LOGI(TAG, "WiFi started mode %s", wifi_mode == WIFI_START_AP ? "soft AP" : "Station");
+  esp_err_t wifi_ret = wifi_start(wifi_mode);
+  if (wifi_ret == ESP_OK) {
+    ESP_LOGI(TAG, "📶 WiFi started mode %s", wifi_mode == WIFI_START_AP ? "soft AP" : "Station");
   } else {
-    ESP_LOGE(TAG, "Failed to start WiFi %s", esp_err_to_name(tmp));
+    ESP_LOGE(TAG, "❌ Failed to start WiFi %s", esp_err_to_name(wifi_ret));
     return;
   }
 
-  tmp = sms_system_init();
-  if (tmp != ESP_OK) {
-    ESP_LOGE(TAG, "Failed init to sms dispatcher");
+  // Инициализация SMS системы
+  esp_err_t sms_ret = sms_system_init();
+  if (sms_ret != ESP_OK) {
+    ESP_LOGE(TAG, "❌ Failed init to sms dispatcher");
     return;
   }
 
+  // Регистрация тестовой команды Telegram
   paramReg(TELERGAMM_TEST_CMD, 1, NULL, NULL, teegram_send_test_handler);
 
+  // Инициализация SIM900D UART
   static const uart_config_t sim900d_uart_cfg = {.baud_rate = 9600,
                                                  .data_bits = UART_DATA_8_BITS,
                                                  .parity = UART_PARITY_DISABLE,
                                                  .stop_bits = UART_STOP_BITS_1,
                                                  .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
+
   if (sim900d_uart_init(SIM900D_UART_NUM, &sim900d_uart_cfg, SIM900D_UART_TX, SIM900D_UART_RX, SIM900D_PWRKEY,
                         SIM900D_STATUS, SIM900D_RI) == ESP_OK) {
-    ESP_LOGV(TAG, "SIM900D UART initialized");
+    ESP_LOGI(TAG, "📱 SIM900D UART initialized");
+
     int reset_attempts = 3;
     bool reset_success = false;
     for (int i = 0; i < reset_attempts; ++i) {
@@ -462,28 +536,34 @@ void app_main(void) {
         reset_success = true;
         break;
       }
-      ESP_LOGW(TAG, "SIM900D reset attempt %d failed", i + 1);
+      ESP_LOGW(TAG, "⚠️ SIM900D reset attempt %d failed", i + 1);
     }
+
     if (reset_success) {
       int baud = sim900d_uart_autobaud(1000);
       if (baud > 0) {
-        ESP_LOGV(TAG, "SIM900D UART baud=%d", baud);
+        ESP_LOGI(TAG, "📱 SIM900D UART baud=%d", baud);
         sim900d_sms_set_callback(sms_assembler_process_incoming);
         sim900d_network_status_set_callback(network_status_callback);
         sim900d_service_start(SIM900S_SMS_MODE_PDU);
-        tmp = ussd_cmd_init();
-        if (tmp != ESP_OK) {
-          ESP_LOGE(TAG, "Failed to init USSD commands module %s", esp_err_to_name(tmp));
+
+        esp_err_t ussd_ret = ussd_cmd_init();
+        if (ussd_ret != ESP_OK) {
+          ESP_LOGE(TAG, "❌ Failed to init USSD commands module %s", esp_err_to_name(ussd_ret));
         }
       } else {
-        ESP_LOGE(TAG, "Failed auto-baud SIM900D");
+        ESP_LOGE(TAG, "❌ Failed auto-baud SIM900D");
       }
     } else {
-      ESP_LOGE(TAG, "Failed to reset SIM900D");
+      ESP_LOGE(TAG, "❌ Failed to reset SIM900D");
     }
   } else {
-    ESP_LOGE(TAG, "Failed to initialize SIM900D UART");
+    ESP_LOGE(TAG, "❌ Failed to initialize SIM900D UART");
   }
 
+  // Финальное сообщение об успешной инициализации
+  ESP_LOGI(TAG, "🚀 System initialization completed successfully");
+
+  // Опционально: запуск мониторинга (раскомментировать при необходимости)
   // xTaskCreate(sms_system_monitor_task, "sms_monitor", 4096, NULL, 3, NULL);
 }

@@ -16,5 +16,7 @@ idf_component_register(SRCS
                         version
                         sms_gateway
                         ota_client
+                        log_spiffs
+                        spiffs_manager
                     INCLUDE_DIRS "."
                     )
