@@ -42,7 +42,7 @@ esp_err_t ussd_cmd_start_balance_check(uint32_t delay_ms) {
     return ESP_OK;
   }
 
-  BaseType_t result = xTaskCreate(balance_check_task, "balance_check", 2048,
+  BaseType_t result = xTaskCreate(balance_check_task, "balance_check", 2048*2,
                                   (void *)(uintptr_t)delay_ms, // Передаем задержку как параметр
                                   2, &balance_task_handle);
 
