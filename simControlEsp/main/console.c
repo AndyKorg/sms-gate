@@ -13,6 +13,7 @@
 #include "../esp_components/sim900d_uart/sim900d_uart_internal.h"
 #include "../esp_components/sim900d_uart/include/sim900d_ussd.h"
 #include "../esp_components/sim900d_uart/include/sim900d_sms_types.h"
+#include "../esp_components/log_spiffs/include/log_spiffs.h"
 
 #define UART_NUM UART_NUM_0
 #define UART_RX_BUF_SIZE 1024
@@ -166,11 +167,79 @@ static void register_ussd(void) {
   ESP_ERROR_CHECK(esp_console_cmd_register(&ussd_cmd));
 }
 
+/*----------------------------*
+ *	log_enable - команда для включения логов
+ *----------------------------*/
+static int cmd_log_enable(int argc, char **argv) {
+  esp_err_t ret = log_spiffs_set_save_enabled(true);
+  if (ret == ESP_OK) {
+    ESP_LOGI(TAG, "Log saving to SPIFFS enabled");
+  } else {
+    ESP_LOGE(TAG, "Failed to enable log saving: %s", esp_err_to_name(ret));
+  }
+  return 0;
+}
+
+static void register_log_enable(void) {
+  const esp_console_cmd_t cmd = {
+    .command = "log_enable",
+    .help = "Enable saving logs to SPIFFS",
+    .hint = NULL,
+    .func = &cmd_log_enable,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+/*----------------------------*
+ *	log_disable - команда для отключения логов
+ *----------------------------*/
+static int cmd_log_disable(int argc, char **argv) {
+  esp_err_t ret = log_spiffs_set_save_enabled(false);
+  if (ret == ESP_OK) {
+    ESP_LOGI(TAG, "Log saving to SPIFFS disabled");
+  } else {
+    ESP_LOGE(TAG, "Failed to disable log saving: %s", esp_err_to_name(ret));
+  }
+  return 0;
+}
+
+static void register_log_disable(void) {
+  const esp_console_cmd_t cmd = {
+    .command = "log_disable",
+    .help = "Disable saving logs to SPIFFS",
+    .hint = NULL,
+    .func = &cmd_log_disable,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+/*----------------------------*
+ *	log_status - команда для проверки статуса логов
+ *----------------------------*/
+static int cmd_log_status(int argc, char **argv) {
+  bool enabled = log_spiffs_is_save_enabled();
+  ESP_LOGI(TAG, "Log saving to SPIFFS is %s", enabled ? "ENABLED" : "DISABLED");
+  return 0;
+}
+
+static void register_log_status(void) {
+  const esp_console_cmd_t cmd = {
+    .command = "log_status",
+    .help = "Show current log saving status",
+    .hint = NULL,
+    .func = &cmd_log_status,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 void register_console_commands() {
   register_parse();
   register_send();
   register_ussd();
   register_get_params();
+  register_log_enable();
+  register_log_disable();
+  register_log_status();
 }
 
 /*----------------------------*
