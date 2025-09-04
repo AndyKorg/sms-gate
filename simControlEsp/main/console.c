@@ -14,6 +14,7 @@
 #include "../esp_components/sim900d_uart/include/sim900d_ussd.h"
 #include "../esp_components/sim900d_uart/include/sim900d_sms_types.h"
 #include "../esp_components/log_spiffs/include/log_spiffs.h"
+#include "drivers/wifi_module.h"
 
 #define UART_NUM UART_NUM_0
 #define UART_RX_BUF_SIZE 1024
@@ -232,6 +233,45 @@ static void register_log_status(void) {
   ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
+/*----------------------------*
+ *  wifi commands
+ *----------------------------*/
+static int cmd_wifi_start_sta(int argc, char **argv) {
+  esp_err_t ret = wifi_start(WIFI_START_STA);
+  if (ret == ESP_OK) {
+    ESP_LOGI(TAG, "WiFi STA start requested");
+  } else {
+    ESP_LOGE(TAG, "Failed to start WiFi STA: %s", esp_err_to_name(ret));
+  }
+  return 0;
+}
+
+static void register_wifi_start_sta(void) {
+  const esp_console_cmd_t cmd = {
+      .command = "wifi_sta_on",
+      .help = "Start WiFi in STA mode",
+      .hint = NULL,
+      .func = &cmd_wifi_start_sta,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+static int cmd_wifi_stop(int argc, char **argv) {
+  wifi_stop();
+  ESP_LOGI(TAG, "WiFi stop requested");
+  return 0;
+}
+
+static void register_wifi_stop(void) {
+  const esp_console_cmd_t cmd = {
+      .command = "wifi_stop",
+      .help = "Stop WiFi (AP/STA)",
+      .hint = NULL,
+      .func = &cmd_wifi_stop,
+  };
+  ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
 void register_console_commands() {
   register_parse();
   register_send();
@@ -240,6 +280,8 @@ void register_console_commands() {
   register_log_enable();
   register_log_disable();
   register_log_status();
+  register_wifi_start_sta(); 
+  register_wifi_stop();
 }
 
 /*----------------------------*
