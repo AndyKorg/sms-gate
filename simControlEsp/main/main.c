@@ -26,6 +26,7 @@
 #include "telegram_bot_nvs.h"
 #include "version.h"
 
+#include "driver/gpio.h"
 #include "ussd_cmd.h"
 
 #define SIM900D_UART_NUM UART_NUM_1
@@ -34,6 +35,7 @@
 #define SIM900D_PWRKEY GPIO_NUM_23
 #define SIM900D_STATUS GPIO_NUM_22
 #define SIM900D_RI GPIO_NUM_33
+#define STATUS_LED_GPIO GPIO_NUM_27 // Пин светодиода статуса
 
 #define VERSION_PARAM "simCtrl_ver" // version application parameter name on the http-page
 #define TELERGAMM_TEST_CMD "tlg_test"
@@ -48,8 +50,11 @@ static const char *TAG = "main";
 // Глобальные переменные для OTA
 static TaskHandle_t ota_task_handle = NULL;
 
+// SMS gateway configuration
+#define SMS_TELEGRAM_STATUS_MONITOR_PERIOD_MS (30 * 1000) // 30 секунд
+
 /**
- * Диспетчер шлюза
+ * Диспетчер шлюта
  */
 esp_err_t sms_system_init(void) {
   ESP_LOGI(TAG, "🚀 init sms dispatcher...");
@@ -231,6 +236,7 @@ static void stop_ota_check_task(void) {
 void wifi_ip_disconnected_handler(void) {
   stop_ota_check_task();
   web_server_stop();
+  sms_gateway_set_provider_status(SMS_HANDLER_TELEGRAM, false);
 }
 
 void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
@@ -239,6 +245,9 @@ void wifi_ip_connected_handler(wifi_mode_t mode, esp_ip4_addr_t ip) {
   if (mode == WIFI_MODE_STA) {
     // Запускаем задачу OTA при подключении в режиме Station
     start_ota_check_task();
+    sms_telegram_start_status_monitor(SMS_TELEGRAM_STATUS_MONITOR_PERIOD_MS);
+  } else {
+    sms_telegram_stop_status_monitor();
   }
 
   if (ip_current.addr != ip.addr) {
@@ -267,33 +276,6 @@ static void network_status_callback(bool registered) {
  */
 esp_err_t read_version_param(const paramName_t paramName, char *value, size_t maxLen) {
   sprintf(value, "%s", version_app());
-  return ESP_OK;
-}
-
-/**
- * Чтение IP адреса OTA сервера для отображения на веб-странице
- */
-esp_err_t read_ota_ip_param(const paramName_t paramName, char *value, size_t maxLen) {
-  esp_err_t ret = ota_server_adr_read(value);
-  if (ret != ESP_OK) {
-    memset(value, 0, maxLen);
-  }
-  return ESP_OK;
-}
-
-/**
- * Сохранение IP адреса OTA сервера из веб-формы
- */
-esp_err_t write_ota_ip_param(const paramName_t paramName, const char *value, size_t maxLen) {
-  if (value && strlen(value) > 0) {
-    esp_err_t ret = ota_server_adr_save((char *)value);
-    if (ret == ESP_OK) {
-      ESP_LOGI(TAG, "✅ OTA server IP saved: %s", value);
-    } else {
-      ESP_LOGE(TAG, "❌ Failed to save OTA server IP: %s", esp_err_to_name(ret));
-    }
-    return ret;
-  }
   return ESP_OK;
 }
 
@@ -387,12 +369,64 @@ static void reboot_reason_check() {
   }
 }
 
-void app_main(void) {
-  esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
+static sim900d_state_t current_state = SIM900D_STATE_OFF;
 
+// Callback для обновления текущего состояния
+static void state_update_callback(sim900d_state_t state) { current_state = state; }
+
+// Задача управления светодиодом
+static void led_state_task(void *pvParameters) {
+  gpio_set_direction(STATUS_LED_GPIO, GPIO_MODE_OUTPUT);
+
+  while (true) {
+    switch (current_state) {
+    case SIM900D_STATE_OFF:
+      gpio_set_level(STATUS_LED_GPIO, 0);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      break;
+
+    case SIM900D_STATE_INITIALIZING:
+      gpio_set_level(STATUS_LED_GPIO, 1);
+      vTaskDelay(pdMS_TO_TICKS(250));
+      gpio_set_level(STATUS_LED_GPIO, 0);
+      vTaskDelay(pdMS_TO_TICKS(250));
+      break;
+
+    case SIM900D_STATE_REGISTERED:
+      gpio_set_level(STATUS_LED_GPIO, 1);
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      gpio_set_level(STATUS_LED_GPIO, 0);
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      break;
+
+    case SIM900D_STATE_ERROR:
+      for (int i = 0; i < 3; i++) {
+        gpio_set_level(STATUS_LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(200));
+        gpio_set_level(STATUS_LED_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(200));
+      }
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      break;
+
+    case SIM900D_STATE_PROCESSING:
+      gpio_set_level(STATUS_LED_GPIO, 1);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      break;
+
+    default:
+      gpio_set_level(STATUS_LED_GPIO, 0);
+      vTaskDelay(pdMS_TO_TICKS(100));
+      break;
+    }
+  }
+}
+
+void app_main(void) {
   reboot_reason_check();
   console_start();
 
+  esp_log_level_set(TAG, LOG_LOCAL_LEVEL);
   // ВАЖНО: Сначала инициализируем SPIFFS Manager
   spiffs_manager_config_t spiffs_manager_cfg = {.partition_count = 1,
                                                 .auto_defrag = true,
@@ -416,9 +450,9 @@ void app_main(void) {
     // Конфигурация логирования в SPIFFS с безопасными настройками
     log_spiffs_config_t log_config = {
         .partition_label = spiffs_manager_cfg.partitions[0].label,
-        .base_path = spiffs_manager_cfg.partitions[0].base_path,        // Указываем конкретный путь для файлов
-        .duplicate_to_console = true,    // Дублировать в консоль
-        .emergency_flush_enabled = false // ОТКЛЮЧАЕМ для предотвращения блокировок
+        .base_path = spiffs_manager_cfg.partitions[0].base_path, // Указываем конкретный путь для файлов
+        .duplicate_to_console = true,                            // Дублировать в консоль
+        .emergency_flush_enabled = false                         // ОТКЛЮЧАЕМ для предотвращения блокировок
     };
 
     ESP_LOGI(TAG, "🔧 Initializing log system with partition: %s, path: %s", log_config.partition_label,
@@ -465,6 +499,9 @@ void app_main(void) {
     ESP_LOGE(TAG, "Failed init web server!");
     return;
   }
+
+  current_state = SIM900D_STATE_INITIALIZING;
+  xTaskCreate(led_state_task, "LED Taskled_state_task", 2048, NULL, 5, NULL);
 
   // Регистрируем параметры версии
   paramReg(VERSION_PARAM, version_app_len() + 1, read_version_param, NULL, NULL);
@@ -528,6 +565,8 @@ void app_main(void) {
   if (sim900d_uart_init(SIM900D_UART_NUM, &sim900d_uart_cfg, SIM900D_UART_TX, SIM900D_UART_RX, SIM900D_PWRKEY,
                         SIM900D_STATUS, SIM900D_RI) == ESP_OK) {
     ESP_LOGI(TAG, "📱 SIM900D UART initialized");
+
+    sim900d_register_state_callback(state_update_callback);
 
     int reset_attempts = 3;
     bool reset_success = false;
